@@ -2,8 +2,14 @@
 """Drive on the custom closed 4-lane bidirectional circuit."""
 import numpy as np
 from metadrive.constants import HELP_MESSAGE
-from metadrive.examples import expert
 
+from runtime_config import (
+    BACKEND,
+    apply_runtime_expert_patch,
+    get_backend_label,
+    get_expert_fn,
+    get_render_config,
+)
 from simple_track import (
     LANE_NUM,
     LANE_WIDTH,
@@ -15,17 +21,15 @@ from simple_track import (
 )
 
 TARGET_SPEED = TARGET_SPEED_KMH
+apply_runtime_expert_patch(cruise_target_kmh=TARGET_SPEED)
+EXPERT = get_expert_fn()
 
 
-def _cruise_action(env):
-    """Expert steering with throttle biased toward ~70 km/h."""
-    action = np.array(expert(env.agent), dtype=np.float32)
-    speed = env.agent.speed_km_h
-    if speed < TARGET_SPEED - 4.0:
-        action[1] = max(float(action[1]), 0.82)
-    elif speed > TARGET_SPEED + 6.0:
-        action[1] = min(float(action[1]), 0.15)
-    return action
+def _drive_action(env):
+    """Use the patched runtime expert; cruise bias is applied inside the patch."""
+    if env.agent.expert_takeover:
+        return EXPERT(env.agent)
+    return [0, 0]
 
 
 def _traffic_count(env):
@@ -40,9 +44,7 @@ if __name__ == "__main__":
         num_scenarios=1,
         start_seed=0,
         map_region_size=4096,
-        image_on_cuda=False,
-        multi_thread_render=False,
-        render_pipeline=False,
+        **get_render_config(),
         random_lane_width=False,
         random_lane_num=False,
         out_of_route_done=False,
@@ -75,15 +77,18 @@ if __name__ == "__main__":
         lap_counter = LapCounter(origin_xy)
         print(HELP_MESSAGE)
         gap = getattr(env.current_map, "close_gap_m", None)
+        render_cfg = get_render_config()
         print(
             f"4-lane bidirectional loop ({LANE_NUM}x2), target speed {TARGET_SPEED:.0f} km/h, "
+            f"backend={get_backend_label()} (runtime_config.BACKEND={BACKEND!r}), "
+            f"render={render_cfg}, "
             f"traffic={_traffic_count(env)} (near={near}, loop={loop})"
             + (f", close gap ~{gap:.1f} m" if gap else "")
         )
         env.agent.expert_takeover = True
         prev_laps = 0
         while True:
-            action = _cruise_action(env) if env.agent.expert_takeover else [0, 0]
+            action = _drive_action(env)
             env.step(action)
             rel = np.array(env.agent.position[:2], dtype=float) - origin_xy
             laps = lap_counter.update(env.agent.position)

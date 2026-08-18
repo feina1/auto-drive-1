@@ -54,7 +54,7 @@ def expert(vehicle, deterministic=False, need_obs=False):
         config["vehicle_config"].update(expert_obs_cfg)
         _expert_observation = LidarStateObservation(config)
         assert _expert_observation.observation_space.shape[0] == 275, "Observation not match"
-        logger.info("Torch is not available. Use numpy PPO expert.")
+        logger.info("Use NumPy PPO expert.")
 
     vehicle.config.update(expert_obs_cfg)
     obs = _expert_observation.observe(vehicle)

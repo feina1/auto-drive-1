@@ -18,6 +18,7 @@ from metadrive.manager.pg_map_manager import PGMapManager
 from metadrive.utils.draw_top_down_map import draw_top_down_map
 
 from loop_map import MERGE_NODE, _force_close_with_blocks, _pre_close_gap
+from runtime_config import get_render_config
 
 logger = logging.getLogger(__name__)
 
@@ -311,9 +312,7 @@ class SimpleTrackEnv(MetaDriveEnv):
     def _post_process_config(self, config):
         config = super()._post_process_config(config)
         config["map_region_size"] = self.MAP_REGION_SIZE
-        config["image_on_cuda"] = False
-        config["multi_thread_render"] = False
-        config["render_pipeline"] = False
+        config.update(get_render_config())
         config["horizon"] = None
         config["agent_configs"][DEFAULT_AGENT]["spawn_lane_index"] = (
             FirstPGBlock.NODE_2,
