@@ -32,12 +32,14 @@ Step 3：Front RGB
 
 ## 2. 三阶段定义
 
-| 阶段 | 目标 | 输入 | 核心模型 | 输出 | 评价 |
-|---|---|---|---|---|---|
-| Step 1 | 验证循迹控制 | GT Trajectory + Vehicle State | Pure Pursuit + P/PID | Vehicle Control | Closed-loop L2、Off-road |
-| Plan 1.5 | 录制并生成 GT 训练集 | Pose + RGB + 中心线 | GT V0 / V1 Labeler | Ego Waypoints Dataset | 标签可视化、Dataset 可训练 |
-| Step 2 | 验证最简单 Vision-to-Waypoints | Front RGB | DINOv3 + Waypoint Head | Ego Waypoints | Waypoint L2、Closed-loop L2 |
-| Step 3 | 验证 VLA 是否改善规划能力 | Front RGB | Vision Encoder + VLA Planner | Ego Waypoints | Waypoint L2、Closed-loop L2、泛化 |
+
+| 阶段       | 目标                        | 输入                            | 核心模型                         | 输出                    | 评价                            |
+| -------- | ------------------------- | ----------------------------- | ---------------------------- | --------------------- | ----------------------------- |
+| Step 1   | 验证循迹控制                    | GT Trajectory + Vehicle State | Pure Pursuit + P/PID         | Vehicle Control       | Closed-loop L2、Off-road       |
+| Plan 1.5 | 录制并生成 GT 训练集              | Pose + RGB + 中心线              | GT V0 / V1 Labeler           | Ego Waypoints Dataset | 标签可视化、Dataset 可训练             |
+| Step 2   | 验证最简单 Vision-to-Waypoints | Front RGB                     | DINOv3 + Waypoint Head       | Ego Waypoints         | Waypoint L2、Closed-loop L2    |
+| Step 3   | 验证 VLA 是否改善规划能力           | Front RGB                     | Vision Encoder + VLA Planner | Ego Waypoints         | Waypoint L2、Closed-loop L2、泛化 |
+
 
 ---
 
@@ -59,9 +61,9 @@ steering / throttle / brake
 
 车辆位置到 GT 轨迹最近点的距离：
 
-\[
-d_t=\min_{p\in GT}\|position_t-p\|_2
-\]
+
+d_t=\min_{p\in GT}position_t-p_2
+
 
 统计：
 
@@ -79,7 +81,7 @@ Mean L2 稳定、不逐圈发散
 
 ---
 
-# Plan 1.5：录制生成 GT 训练集
+# Step 1.5：录制生成 GT 训练集
 
 Step 1 验证闭环控制；Plan 1.5 在此基础上**离线录制 + 标注 GT Waypoints**，为 Step 2 的 Dataset / DINOv3 pipeline 提供监督信号。
 
@@ -88,7 +90,7 @@ Step 1 验证闭环控制；Plan 1.5 在此基础上**离线录制 + 标注 GT W
 ```text
 Closed-loop Demo（drive_simple_track.py）
         ↓
-每帧录制：pose / speed / front RGB /（可选）lidar
+每帧录制：pose / speed / front RGB /（
         ↓
 GT Labeler（V0 → V1）
         ↓
@@ -126,11 +128,13 @@ Step 2：DINOv3 + Waypoint Head 训练
 
 ### 特点
 
-| 项 | 说明 |
-|---|---|
-| 适用场景 | 车辆基本在中心线附近、正常循迹 |
-| 优点 | 实现简单、无额外 planner、标签稳定 |
-| 局限 | 偏离较大时，GT 仍是「回中心线前的中心线延伸」，不适合 recovery 监督 |
+
+| 项    | 说明                                       |
+| ---- | ---------------------------------------- |
+| 适用场景 | 车辆基本在中心线附近、正常循迹                          |
+| 优点   | 实现简单、无额外 planner、标签稳定                    |
+| 局限   | 偏离较大时，GT 仍是「回中心线前的中心线延伸」，不适合 recovery 监督 |
+
 
 ### V0 成功标准
 
@@ -162,16 +166,18 @@ CTE = 当前 pose 到中心线的横向偏差（Cross Track Error）
 
 在 Frenet 坐标系下，以弧长 `s` 为自变量，构造横向偏移 `l(s)`：
 
-\[
+
 l(s):\quad l_0 \rightarrow 0
-\]
+
 
 **边界条件（示意）**：
 
-| 位置 | 横向 `l` | 横向导数 / 航向 |
-|---|---|---|
-| 起点 `s = s₀` | `l₀ = CTE` | 与当前车辆航向相对中心线一致 |
-| 终点 `s = s₀ + L`（`L ∈ [20, 40]` m） | `l = 0` | 航向与中心线切向一致 |
+
+| 位置                                | 横向 `l`     | 横向导数 / 航向      |
+| --------------------------------- | ---------- | -------------- |
+| 起点 `s = s₀`                       | `l₀ = CTE` | 与当前车辆航向相对中心线一致 |
+| 终点 `s = s₀ + L`（`L ∈ [20, 40]` m） | `l = 0`    | 航向与中心线切向一致     |
+
 
 五次多项式可唯一确定 `l(s)`，满足起终点的位置、一阶（航向）约束；纵向沿 `s` 匀速或按目标速度参数化即可。
 
@@ -209,14 +215,16 @@ Step 2 在大偏差场景 closed-loop 优于仅 V0 训练（后续验证）
 
 ## Plan 1.5 实施顺序（建议）
 
-| 顺序 | 任务 | 产出 |
-|:---:|---|---|
-| 1 | 中心线 Global Path 构建 + 最近点 / 弧长查询 | `reference_path.py` |
-| 2 | GT V0 labeler + 单帧可视化 | ego waypoints 图 |
-| 3 | 闭环录制脚本（RGB + pose + GT） | raw episodes |
-| 4 | Dataset 打包 + Step 2 dataloader | train/val split |
-| 5 | GT V1 Frenet recovery labeler | `gt_waypoints_v1` |
-| 6 | 混合数据集训练 DINOv3 baseline | Step 2 pipeline 跑通 |
+
+| 顺序  | 任务                              | 产出                  |
+| --- | ------------------------------- | ------------------- |
+| 1   | 中心线 Global Path 构建 + 最近点 / 弧长查询 | `reference_path.py` |
+| 2   | GT V0 labeler + 单帧可视化           | ego waypoints 图     |
+| 3   | 闭环录制脚本（RGB + pose + GT）         | raw episodes        |
+| 4   | Dataset 打包 + Step 2 dataloader  | train/val split     |
+| 5   | GT V1 Frenet recovery labeler   | `gt_waypoints_v1`   |
+| 6   | 混合数据集训练 DINOv3 baseline         | Step 2 pipeline 跑通  |
+
 
 ---
 
@@ -345,12 +353,14 @@ Waypoints
 
 重点比较：
 
-| Metric | Step 2 Vision | Step 3 VLA |
-|---|---:|---:|
-| Waypoint L2 | | |
-| Closed-loop L2 | | |
-| Off-road | | |
-| New Track L2 | | |
+
+| Metric         | Step 2 Vision | Step 3 VLA |
+| -------------- | ------------- | ---------- |
+| Waypoint L2    |               |            |
+| Closed-loop L2 |               |            |
+| Off-road       |               |            |
+| New Track L2   |               |            |
+
 
 只有当 Step 3 在轨迹精度、闭环稳定性或泛化能力上优于 Step 2，才认为 VLA 对自动驾驶任务本身产生了实际增益。
 
@@ -400,3 +410,4 @@ RGB → Vision Encoder → Visual Tokens
 
 1. **纯视觉一段式方案是否能够完成稳定闭环驾驶？**
 2. **在相同任务下，引入 VLA 后是否真正提升驾驶与泛化能力，而不仅仅增加语言交互能力？**
+

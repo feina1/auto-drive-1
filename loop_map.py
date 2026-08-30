@@ -1,25 +1,26 @@
-"""Random closed circuit tracks for single-agent MetaDrive demos."""
+"""Simple closed track built from straight and curve PG blocks."""
 
 import logging
 import math
+import os
 
+import cv2
 import numpy as np
 
-from metadrive.component.lane.circular_lane import CircularLane
 from metadrive.component.lane.straight_lane import StraightLane
 from metadrive.component.map.pg_map import PGMap
 from metadrive.component.pg_space import Parameter
 from metadrive.component.pgblock.curve import Curve
 from metadrive.component.pgblock.first_block import FirstPGBlock
-from metadrive.component.pgblock.pg_block import PGBlock
 from metadrive.component.pgblock.straight import Straight
-from metadrive.component.pg_space import ParameterSpace
-from metadrive.component.road_network import Road
 from metadrive.constants import DEFAULT_AGENT, PGLineType, TerminationState
 from metadrive.envs.metadrive_env import MetaDriveEnv
 from metadrive.manager.pg_map_manager import PGMapManager
+from metadrive.utils.draw_top_down_map import draw_top_down_map
+from metadrive.utils.math import wrap_to_pi
 from metadrive.utils.pg.utils import get_lanes_bounding_box
-from metadrive.utils.math import Vector, wrap_to_pi
+
+from runtime_config import get_render_config
 
 logger = logging.getLogger(__name__)
 
@@ -32,110 +33,6 @@ NEIGHBOR_ENDPOINT_TOL = 7.5
 
 def _heading_diff(a, b):
     return abs(wrap_to_pi(a - b))
-
-
-def _scaled_side_lengths(rng, n_corners, lo=48.0, hi=165.0):
-    """Random side lengths with bounded perimeter for easier loop closure."""
-    perimeter = float(rng.uniform(680.0, 980.0))
-    weights = rng.uniform(0.55, 1.45, size=n_corners)
-    weights /= weights.sum()
-    sides = [perimeter * float(w) for w in weights]
-    sides = [float(np.clip(s, lo, hi)) for s in sides]
-    scale = perimeter / sum(sides)
-    return [float(np.clip(s * scale, lo, hi)) for s in sides]
-
-
-def _split_length(total, parts, rng, minimum=12.0):
-    """Split a straight side into several random segments with exact total length."""
-    total = float(total)
-    parts = max(1, int(parts))
-    if parts == 1:
-        return [total]
-
-    remaining = total - minimum * parts
-    if remaining <= 0:
-        return [total / parts] * parts
-
-    weights = rng.uniform(0.5, 1.5, size=parts)
-    weights /= weights.sum()
-    lengths = [minimum + remaining * w for w in weights]
-    lengths[-1] = total - sum(lengths[:-1])
-    return [float(max(minimum, l)) for l in lengths]
-
-
-def _curve_item(rng, angle, turn_dir, label, radius=None, tail=None):
-    angle = float(max(15.0, min(180.0, angle)))
-    cfg = {
-        Parameter.length: float(tail if tail is not None else rng.uniform(4, 18)),
-        Parameter.radius: float(radius if radius is not None else rng.uniform(24, 62)),
-        Parameter.angle: angle,
-        Parameter.dir: turn_dir,
-    }
-    return Curve, cfg, label
-
-
-def _turn_label(turn_dir):
-    return "L" if int(turn_dir) == 0 else "R"
-
-
-def _random_corner_angles(rng, n_corners):
-    """Corner deflections (degrees) summing to 360 for a same-direction closed loop."""
-    angles = rng.uniform(40.0, 110.0, size=n_corners)
-    angles = angles / angles.sum() * 360.0
-    for _ in range(32):
-        angles = np.clip(angles, 28.0, 148.0)
-        delta = 360.0 - float(angles.sum())
-        if abs(delta) < 0.05:
-            break
-        free = (angles > 28.05) & (angles < 147.95)
-        if not np.any(free):
-            break
-        share = free.astype(float)
-        share /= share.sum()
-        angles[free] += delta * share[free]
-    angles[-1] += 360.0 - float(angles.sum())
-    return [float(a) for a in angles]
-
-
-def _chicane_items(rng, side_length, force=False):
-    """S-bend on a straight: one left + one right, zero net heading change."""
-    side_length = float(side_length)
-    if side_length < 52.0:
-        return []
-    if not force and rng.random() > 0.48:
-        return []
-    bend = float(rng.uniform(14.0, min(34.0, side_length * 0.12)))
-    radius = float(rng.uniform(34.0, 68.0))
-    lead = max(12.0, side_length * float(rng.uniform(0.20, 0.36)))
-    trail = max(12.0, side_length - lead - radius * bend * math.pi / 90.0 * 2.5)
-    if trail < 12.0:
-        lead = side_length * 0.3
-        trail = side_length * 0.3
-    first_dir = int(rng.choice([0, 1]))
-    second_dir = 1 - first_dir
-    return [
-        _straight_item(lead),
-        _curve_item(rng, bend, first_dir, _turn_label(first_dir), radius=radius, tail=rng.uniform(4, 12)),
-        _curve_item(rng, bend, second_dir, _turn_label(second_dir), radius=radius, tail=rng.uniform(4, 12)),
-        _straight_item(trail),
-    ]
-
-
-def _append_side(plan, rng, side_length, chicane_quota=None):
-    side_length = float(side_length)
-    if chicane_quota is not None and chicane_quota[0] > 0 and side_length >= 52.0:
-        chicane = _chicane_items(rng, side_length, force=True)
-        if chicane:
-            chicane_quota[0] -= 1
-            plan.extend(chicane)
-            return
-    if chicane_quota is None:
-        chicane = _chicane_items(rng, side_length, force=False)
-        if chicane:
-            plan.extend(chicane)
-            return
-    for length in _split_length(side_length, int(rng.randint(2, 6)), rng, minimum=10.0):
-        plan.append(_straight_item(length))
 
 
 def _collect_lanes(road_network):
@@ -185,10 +82,8 @@ def _network_has_crossings(road_network, new_lane_start=0, ignore_lanes=None):
     ignore = {id(lane) for lane in (ignore_lanes or [])}
     lanes = _collect_lanes(road_network)
     if new_lane_start <= 0:
-        check_new = lanes
-        check_old = lanes
-        for i, lane_a in enumerate(check_new):
-            for lane_b in check_old[i + 1:]:
+        for i, lane_a in enumerate(lanes):
+            for lane_b in lanes[i + 1:]:
                 if id(lane_a) in ignore or id(lane_b) in ignore:
                     continue
                 if _lanes_are_neighbors(lane_a, lane_b):
@@ -230,210 +125,13 @@ def _lane_crosses_network(lane, road_network):
     return False
 
 
-def _straight_item(length):
-    return Straight, {Parameter.length: float(length)}, "S"
-
-
-def _corner_items(rng, angle, turn_dir, wild=False):
-    angle = float(angle)
-    label = _turn_label(turn_dir)
-    split_prob = 0.82 if wild else 0.58
-    if angle >= 48.0 and rng.random() < split_prob:
-        a1 = float(rng.uniform(max(18.0, angle * 0.22), min(88.0, angle * 0.78)))
-        a2 = angle - a1
-        r1 = float(rng.uniform(22, 64 if wild else 52))
-        r2 = float(rng.uniform(22, 64 if wild else 52))
-        return [
-            _curve_item(rng, a1, turn_dir, label, radius=r1, tail=rng.uniform(3, 18)),
-            _curve_item(rng, a2, turn_dir, label, radius=r2, tail=rng.uniform(3, 18)),
-        ]
-    radius = float(rng.uniform(24, 68 if wild else 54))
-    return [_curve_item(rng, angle, turn_dir, label, radius=radius)]
-
-
-def _circuit_plan(rng):
-    """Wild irregular loop: same-direction corners + S-chicane straights (L and R)."""
-    n_corners = int(rng.randint(8, 14))
-    target = int(rng.randint(38, 58))
-    turn_dir = int(rng.choice([0, 1]))
-    corner_angles = _random_corner_angles(rng, n_corners)
-    sides = _scaled_side_lengths(rng, n_corners, lo=48.0, hi=155.0)
-    chicane_quota = [int(rng.randint(2, 4))]
-
-    plan = []
-    for side_idx in range(n_corners):
-        _append_side(plan, rng, sides[side_idx], chicane_quota=chicane_quota)
-        plan.extend(_corner_items(rng, corner_angles[side_idx], turn_dir, wild=True))
-
-    while len(plan) < target:
-        straight_indexes = [i for i, item in enumerate(plan) if item[2] == "S"]
-        if not straight_indexes:
-            break
-        idx = int(rng.choice(straight_indexes))
-        _, cfg, _ = plan[idx]
-        old_len = float(cfg[Parameter.length])
-        if old_len < 28:
-            break
-        left = old_len / 2.0
-        plan[idx:idx + 1] = [_straight_item(left), _straight_item(old_len - left)]
-
-    return plan, f"{n_corners}-gon"
-
-
-def _minimal_irregular_plan(rng):
-    n_corners = int(rng.choice([7, 8, 9, 10]))
-    turn_dir = int(rng.choice([0, 1]))
-    corner_angles = _random_corner_angles(rng, n_corners)
-    sides = [float(rng.uniform(52, 95)) for _ in range(n_corners)]
-    chicane_quota = [1]
-    plan = []
-    for side_idx in range(n_corners):
-        _append_side(plan, rng, sides[side_idx], chicane_quota=chicane_quota)
-        plan.extend(_corner_items(rng, corner_angles[side_idx], turn_dir, wild=False))
-    return plan, f"{n_corners}-gon-basic"
-
-
-def _fixed_straight(length):
-    return Straight, {Parameter.length: float(length)}, "S"
-
-
-def _fixed_curve(angle, turn_dir, radius=42.0, tail=8.0):
-    label = _turn_label(turn_dir)
-    return Curve, {
-        Parameter.length: float(tail),
-        Parameter.radius: float(radius),
-        Parameter.angle: float(angle),
-        Parameter.dir: int(turn_dir),
-    }, label
-
-
-def _symmetric_side_items(rng, total_length, n_parts=None, minimum=10.0):
-    """Split one straight edge into random segments (same edge can vary)."""
-    total_length = float(total_length)
-    if n_parts is None:
-        n_parts = int(rng.randint(2, 5))
-    return [_straight_item(length) for length in _split_length(total_length, n_parts, rng, minimum=minimum)]
-
-
-def _symmetric_chicane_items(rng, side_length, flipped=False):
-    """S-bend on a straight edge: one left + one right, zero net heading change."""
-    side_length = float(side_length)
-    if side_length < 50.0:
-        return _symmetric_side_items(rng, side_length)
-
-    bend = float(rng.uniform(12.0, min(24.0, side_length * 0.08)))
-    radius = float(rng.uniform(40.0, 58.0))
-    lead_ratio = float(rng.uniform(0.24, 0.32))
-    lead = max(12.0, side_length * lead_ratio)
-    bend_cost = radius * bend * math.pi / 180.0 * 2.0
-    trail = side_length - lead - bend_cost
-    if trail < 12.0:
-        return _symmetric_side_items(rng, side_length)
-
-    first_dir = 1 if flipped else 0
-    second_dir = 1 - first_dir
-    return [
-        _straight_item(lead),
-        _curve_item(rng, bend, first_dir, _turn_label(first_dir), radius=radius, tail=6.0),
-        _curve_item(rng, bend, second_dir, _turn_label(second_dir), radius=radius, tail=6.0),
-        _straight_item(trail),
-    ]
-
-
-def _symmetric_corner_angles(rng, base_angle=90.0):
-    """Four equal corners for reliable loop closure; micro jitter stays on same edge only."""
-    base = float(base_angle * rng.uniform(0.97, 1.03))
-    return [base, base, base, base]
-
-
-def _symmetric_circuit_plan(rng, start_length=18.0):
-    """
-    Left-right symmetric closed loop.
-
-    - Four edges (bottom / right / top / left) with matched opposite lengths.
-    - Randomness lives in segment splits and mirrored S-chicane shape, not opposite totals.
-    - Vertical limbs carry mirrored S-chicanes so the track includes both L and R.
-    """
-    scale = float(rng.uniform(0.92, 1.08))
-    bottom_total = float(rng.uniform(88.0, 132.0)) * scale
-    bottom = max(24.0, bottom_total - float(start_length))
-    top = bottom_total
-    right = float(rng.uniform(72.0, 112.0)) * scale
-    left = right
-
-    turn_dir = int(rng.choice([0, 1]))
-    corner_angles = _symmetric_corner_angles(rng, base_angle=float(rng.uniform(88.0, 92.0)))
-
-    plan = []
-    plan.extend(_symmetric_side_items(rng, bottom, n_parts=int(rng.randint(2, 5))))
-    plan.extend(_corner_items(rng, corner_angles[0], turn_dir, wild=rng.random() < 0.35))
-
-    plan.extend(_symmetric_chicane_items(rng, right, flipped=False))
-    plan.extend(_corner_items(rng, corner_angles[1], turn_dir, wild=rng.random() < 0.35))
-
-    # Same total length as bottom, different random split pattern on the opposite edge.
-    plan.extend(_symmetric_side_items(rng, top, n_parts=int(rng.randint(2, 6))))
-    plan.extend(_corner_items(rng, corner_angles[2], turn_dir, wild=rng.random() < 0.35))
-
-    plan.extend(_symmetric_chicane_items(rng, left, flipped=True))
-    plan.extend(_corner_items(rng, corner_angles[3], turn_dir, wild=rng.random() < 0.35))
-
-    return plan, "symmetric"
-
-
-def _sketch_reference_plan(rng):
-    """
-    Hand-drawn reference loop: rounded rectangle with a right-side inward bay.
-
-    Topology (clockwise):
-      top -> top-right -> upper right -> bay (L / hairpin R / L) ->
-      lower right -> bottom -> bottom-left -> left side -> top-left.
-    """
-    scale = float(rng.uniform(0.94, 1.06))
-    s = scale
-    top = 125.0 * s
-    right_upper = 32.0 * s
-    right_lower = 48.0 * s
-    bay_depth = 46.0 * s
-    left_side = 220.0 * s
-    r_outer = 45.0 * s
-    r_bay = 38.0 * s
-    r_hairpin = 32.0 * s
-
-    plan = [
-        _fixed_straight(top),
-        _fixed_curve(90, 1, r_outer, 8),
-        _fixed_straight(right_upper),
-        _fixed_curve(90, 0, r_bay, 8),
-        _fixed_straight(bay_depth),
-        _fixed_curve(180, 1, r_hairpin, 6),
-        _fixed_straight(bay_depth),
-        _fixed_curve(90, 0, r_bay, 8),
-        _fixed_straight(right_lower),
-        _fixed_curve(90, 1, r_outer, 8),
-        _fixed_straight(top),
-        _fixed_curve(90, 1, r_outer, 8),
-        _fixed_straight(left_side),
-        _fixed_curve(90, 1, r_outer, 8),
-    ]
-    return plan, "sketch-ref"
-
-
-def _reliable_irregular_plan(rng):
-    n_corners = int(rng.choice([8, 9, 10, 11]))
-    turn_dir = int(rng.choice([0, 1]))
-    corner_angles = _random_corner_angles(rng, n_corners)
-    sides = _scaled_side_lengths(rng, n_corners, lo=52.0, hi=105.0)
-    chicane_quota = [2]
-    plan = []
-    for side_idx in range(n_corners):
-        _append_side(plan, rng, sides[side_idx], chicane_quota=chicane_quota)
-        plan.extend(_corner_items(rng, corner_angles[side_idx], turn_dir, wild=True))
-    return plan, f"{n_corners}-gon-lite"
-
-
 def _lane_end_pose(lane):
     return np.array(lane.end, dtype=float), lane.heading_theta_at(lane.length)
+
+
+def _entry_pose(road_network):
+    merge_lane = road_network.graph[FirstPGBlock.NODE_2][MERGE_NODE][0]
+    return np.array(merge_lane.end, dtype=float), merge_lane.heading_theta_at(merge_lane.length)
 
 
 def _pre_close_gap(last_block, road_network):
@@ -444,19 +142,6 @@ def _pre_close_gap(last_block, road_network):
     gap = float(np.linalg.norm(end_pos - entry_pos))
     heading_gap = _heading_diff(end_heading, entry_heading)
     return gap, heading_gap
-
-
-def _validate_spawn_lane(road_network):
-    try:
-        lane = road_network.graph[FirstPGBlock.NODE_2][MERGE_NODE][0]
-    except (KeyError, IndexError):
-        return False
-    return lane.length > 0.5 and MERGE_NODE in road_network.graph
-
-
-def _entry_pose(road_network):
-    merge_lane = road_network.graph[FirstPGBlock.NODE_2][MERGE_NODE][0]
-    return np.array(merge_lane.end, dtype=float), merge_lane.heading_theta_at(merge_lane.length)
 
 
 def _attach_merge_link(last_block, road_network, lane_width):
@@ -516,8 +201,12 @@ def _force_close_with_blocks(last_block, road_network, render_np, physics_world,
                 Parameter.dir: 0 if turn > 0 else 1,
             }
             block = Curve(
-                idx, current.get_socket(0), road_network, block_seed,
-                remove_negative_lanes=True, ignore_intersection_checking=True,
+                idx,
+                current.get_socket(0),
+                road_network,
+                block_seed,
+                remove_negative_lanes=True,
+                ignore_intersection_checking=True,
             )
             block.construct_from_config(cfg, render_np, physics_world)
             if _network_has_crossings(road_network):
@@ -530,8 +219,12 @@ def _force_close_with_blocks(last_block, road_network, render_np, physics_world,
         if dist > 5:
             cfg = {Parameter.length: float(min(85, max(20, dist * 0.85)))}
             block = Straight(
-                idx, current.get_socket(0), road_network, block_seed,
-                remove_negative_lanes=True, ignore_intersection_checking=True,
+                idx,
+                current.get_socket(0),
+                road_network,
+                block_seed,
+                remove_negative_lanes=True,
+                ignore_intersection_checking=True,
             )
             block.construct_from_config(cfg, render_np, physics_world)
             if _network_has_crossings(road_network):
@@ -546,292 +239,298 @@ def _force_close_with_blocks(last_block, road_network, render_np, physics_world,
     return False, current, extra_blocks, 9999
 
 
-def _build_fallback_circle(first_block, road_network, lane_num, lane_width, render_np, physics_world):
-    entry_node = first_block.get_socket(0).positive_road.end_node
-    entry_lane = first_block.get_socket(0).positive_road.get_lanes(road_network)[0]
-    entry_point = np.array(entry_lane.end, dtype=float)
-    center = Vector((entry_point[0], entry_point[1] + 70))
-    line_types = (PGLineType.BROKEN, PGLineType.SIDE)
-    road_network.add_lane(
-        entry_node, "LM",
-        CircularLane(center, 70, -math.pi / 2, math.pi, False, lane_width, line_types),
-    )
-    road_network.add_lane(
-        "LM", entry_node,
-        CircularLane(center, 70, math.pi / 2, math.pi, False, lane_width, line_types),
-    )
-    loop_block = _FallbackLoopBlock(
-        1, first_block.get_socket(0), road_network, 0,
-        remove_negative_lanes=True, ignore_intersection_checking=True,
-    )
-    loop_block.construct_block(render_np, physics_world)
-    return [loop_block], "fallback circle"
+LEFT = 0
+RIGHT = 1
+CURVE_TAIL = 12.0
+LANE_NUM = 2  # lanes per direction; with adverse lanes => 4 lanes total
+LANE_WIDTH = 3.5
+
+# (type, ...) — straight: length; curve: radius, angle_deg, direction
+TRACK_SEGMENTS = [
+    # Outbound
+    ("straight", 1000.0),
+    ("curve", 500.0, 180.0, RIGHT),
+    ("straight", 300.0),
+    ("curve", 250.0, 90.0, LEFT),
+    ("straight", 500.0),
+    ("curve", 100.0, 90.0, LEFT),
+    ("straight", 200.0),
+    ("curve", 100.0, 180.0, RIGHT),
+    ("straight", 300.0),
+    ("curve", 100.0, 45.0, RIGHT),
+    ("straight", 400.0),
+    ("curve", 100.0, 45.0, LEFT),
+    ("straight", 25.736),
+    # Return (mirror)
+    ("straight", 25.736),
+    ("curve", 100.0, 45.0, LEFT),
+    ("straight", 400.0),
+    ("curve", 100.0, 45.0, RIGHT),
+    ("straight", 300.0),
+    ("curve", 100.0, 180.0, RIGHT),
+    ("straight", 200.0),
+    ("curve", 100.0, 90.0, LEFT),
+    ("straight", 500.0),
+    ("curve", 250.0, 90.0, LEFT),
+    ("straight", 300.0),
+    ("curve", 500.0, 180.0, RIGHT),
+    ("straight", 1000.0),
+]
+
+OUTPUT_PNG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "res.png")
+DEFAULT_TRAFFIC_COUNT = 28
+TARGET_SPEED_KMH = 70.0
+FIRST_BLOCK_LENGTH = 18.0
 
 
-class _FallbackLoopBlock(PGBlock):
-    ID = "Q"
-    SOCKET_NUM = 1
-    PARAMETER_SPACE = ParameterSpace({})
+def estimate_track_length(include_first_block=True):
+    """Approximate closed-loop driving distance in meters."""
+    total = FIRST_BLOCK_LENGTH if include_first_block else 0.0
+    for segment in TRACK_SEGMENTS:
+        if segment[0] == "straight":
+            total += float(segment[1])
+        else:
+            _, radius, angle, _ = segment
+            total += float(radius) * math.radians(float(angle)) + CURVE_TAIL
+    return total
 
-    def _try_plug_into_previous_block(self) -> bool:
-        socket_road = self.pre_block_socket.positive_road
-        self.add_sockets(self.create_socket_from_positive_road(Road(socket_road.end_node, "LM")))
-        return True
+
+class LapCounter:
+    """Count completed laps by returning near the start after enough distance."""
+
+    def __init__(self, origin_xy, min_lap_m=None, finish_radius=40.0):
+        self.origin = np.array(origin_xy[:2], dtype=float)
+        self.min_lap_m = float(min_lap_m or estimate_track_length() * 0.82)
+        self.finish_radius = float(finish_radius)
+        self.laps = 0
+        self.travel_m = 0.0
+        self.last_pos = self.origin.copy()
+        self.inside_finish = True
+
+    def update(self, position_xy):
+        pos = np.array(position_xy[:2], dtype=float)
+        self.travel_m += float(np.linalg.norm(pos - self.last_pos))
+        self.last_pos = pos
+
+        dist = float(np.linalg.norm(pos - self.origin))
+        if dist >= self.finish_radius:
+            self.inside_finish = False
+        elif not self.inside_finish and self.travel_m >= self.min_lap_m:
+            self.laps += 1
+            self.travel_m = 0.0
+            self.inside_finish = True
+        return self.laps
 
 
-class LoopMap(PGMap):
-    """Random closed circuit with straights and mixed left/right turns."""
+def _iter_drivable_lanes(road_network, min_length=55.0):
+    for _from, to_dict in road_network.graph.items():
+        for _to, lane_list in to_dict.items():
+            for lane in lane_list:
+                if lane.length > min_length:
+                    yield lane
 
-    START_LENGTH = 18
-    MAX_ATTEMPTS = 40
-    PRE_CLOSE_GAP_TOL = 36.0
-    FINAL_GAP_TOL = 30.0
+
+def spawn_nearby_traffic(env, count=14, gap_m=35.0, target_speed_kmh=TARGET_SPEED_KMH):
+    """Spawn traffic on the main straight right after the merge point."""
+    from metadrive.component.pgblock.first_block import FirstPGBlock
+    from metadrive.component.vehicle.vehicle_type import random_vehicle_type
+    from metadrive.policy.idm_policy import IDMPolicy
+
+    IDMPolicy.NORMAL_SPEED = float(target_speed_kmh)
+    tm = env.engine.traffic_manager
+    traffic_cfg = env.config["traffic_vehicle_config"].copy()
+    base_cfg = env.config["vehicle_config"].copy()
+    base_cfg.update(traffic_cfg)
+
+    merge_node = FirstPGBlock.NODE_3
+    candidate_lanes = []
+    if merge_node in env.current_map.road_network.graph:
+        for _to, lane_list in env.current_map.road_network.graph[merge_node].items():
+            for lane in lane_list:
+                if lane.length > 80.0:
+                    candidate_lanes.append(lane)
+    # Opposite-direction main straight into merge.
+    for _from, to_dict in env.current_map.road_network.graph.items():
+        if merge_node not in to_dict:
+            continue
+        for lane in to_dict[merge_node]:
+            if lane.length > 80.0:
+                candidate_lanes.append(lane)
+
+    if not candidate_lanes:
+        return 0
+
+    longitudes = [gap_m * i for i in range(1, 8)]
+    spawned = 0
+    for lane in candidate_lanes:
+        for longitude in longitudes:
+            if spawned >= count:
+                break
+            if longitude >= lane.length - 15.0:
+                continue
+            vehicle_cfg = {
+                **base_cfg,
+                "spawn_lane_index": lane.index,
+                "spawn_longitude": float(longitude),
+                "spawn_lateral": 0.0,
+            }
+            try:
+                vehicle_type = random_vehicle_type(env.np_random, [0.2, 0.3, 0.3, 0.2, 0.0])
+                vehicle = tm.spawn_object(vehicle_type, vehicle_config=vehicle_cfg)
+                tm.add_policy(vehicle.id, IDMPolicy, vehicle, env.engine.global_seed + 1000 + spawned)
+                tm._traffic_vehicles.append(vehicle)
+                spawned += 1
+            except (AssertionError, TypeError, ValueError):
+                continue
+    logger.info("Spawned %s nearby traffic vehicles", spawned)
+    return spawned
+
+
+def spawn_track_traffic(env, num_vehicles=DEFAULT_TRAFFIC_COUNT, target_speed_kmh=TARGET_SPEED_KMH):
+    """Spawn IDM traffic around the full closed loop."""
+    from metadrive.component.vehicle.vehicle_type import random_vehicle_type
+    from metadrive.policy.idm_policy import IDMPolicy
+
+    IDMPolicy.NORMAL_SPEED = float(target_speed_kmh)
+    rng = env.np_random
+    lanes = list(_iter_drivable_lanes(env.current_map.road_network))
+    rng.shuffle(lanes)
+
+    traffic_cfg = env.config["traffic_vehicle_config"].copy()
+    base_cfg = env.config["vehicle_config"].copy()
+    base_cfg.update(traffic_cfg)
+
+    spawned = 0
+    tm = env.engine.traffic_manager
+    for lane in lanes:
+        if spawned >= num_vehicles:
+            break
+        margin = min(25.0, lane.length * 0.15)
+        if lane.length <= 2 * margin + 5.0:
+            continue
+        longitude = float(rng.uniform(margin, lane.length - margin))
+        vehicle_cfg = {
+            **base_cfg,
+            "spawn_lane_index": lane.index,
+            "spawn_longitude": longitude,
+            "spawn_lateral": 0.0,
+        }
+        try:
+            vehicle_type = random_vehicle_type(rng, [0.2, 0.3, 0.3, 0.2, 0.0])
+            vehicle = tm.spawn_object(vehicle_type, vehicle_config=vehicle_cfg)
+            tm.add_policy(vehicle.id, IDMPolicy, vehicle, env.engine.global_seed + spawned)
+            tm._traffic_vehicles.append(vehicle)
+            spawned += 1
+        except (AssertionError, TypeError, ValueError):
+            continue
+    logger.info("Spawned %s loop traffic vehicles (target %s)", spawned, num_vehicles)
+    return spawned
+
+
+class SimpleTrackMap(PGMap):
+    """Closed course defined by TRACK_SEGMENTS plus a merge link back to the start."""
+
+    CLOSE_POS_TOL = 50.0
+    CLOSE_HEADING_TOL = 0.4
+    FINAL_GAP_TOL = 35.0
 
     def _generate(self):
         parent_node_path = self.engine.worldNP
         physics_world = self.engine.physics_world
         lane_num = self.config["lane_num"]
         lane_width = self.config["lane_width"]
-        seed = int(self.config.get("seed", 0))
-        self.circuit_seed = seed
 
-        for attempt in range(28):
-            trial_rng = np.random.RandomState(seed + attempt * 3571)
-            blocks, label = self._try_build_circuit(
-                trial_rng,
-                lane_num,
-                lane_width,
-                parent_node_path,
-                physics_world,
-                plan_fn=_symmetric_circuit_plan,
-                symmetric=True,
-            )
-            if blocks is not None:
-                self.blocks = blocks
-                self.circuit_label = label
-                self.circuit_segments = len(blocks) - 1
-                self.road_network.after_init()
-                logger.info("Symmetric circuit ready: %s (seed=%s, try=%s)", label, seed, attempt)
-                return
-
-        for attempt in range(12):
-            trial_rng = np.random.RandomState(seed + 12000 + attempt * 3571)
-            blocks, label = self._try_build_circuit(
-                trial_rng,
-                lane_num,
-                lane_width,
-                parent_node_path,
-                physics_world,
-                plan_fn=_sketch_reference_plan,
-            )
-            if blocks is not None:
-                self.blocks = blocks
-                self.circuit_label = label
-                self.circuit_segments = len(blocks) - 1
-                self.road_network.after_init()
-                logger.info("Sketch circuit ready: %s (seed=%s, try=%s)", label, seed, attempt)
-                return
-
-        for attempt in range(self.MAX_ATTEMPTS):
-            trial_rng = np.random.RandomState(seed + attempt * 7919)
-            blocks, label = self._try_build_circuit(
-                trial_rng, lane_num, lane_width, parent_node_path, physics_world
-            )
-            if blocks is not None:
-                self.blocks = blocks
-                self.circuit_label = label
-                self.circuit_segments = len(blocks) - 1
-                self.road_network.after_init()
-                logger.info("Random circuit ready: %s (seed=%s, try=%s)", label, seed, attempt)
-                return
-
-        logger.warning("Random circuit failed, using simplified irregular loop (seed=%s)", seed)
-        for lite_try in range(8):
-            trial_rng = np.random.RandomState(seed + 99991 + lite_try * 4817)
-            blocks, label = self._try_build_circuit(
-                trial_rng, lane_num, lane_width, parent_node_path, physics_world, reliable=True
-            )
-            if blocks is not None:
-                self.blocks = blocks
-                self.circuit_label = label
-                self.circuit_segments = len(blocks) - 1
-                self.road_network.after_init()
-                return
-
-        logger.warning("Simplified loop failed, trying basic irregular loop (seed=%s)", seed)
-        for extra in range(24):
-            trial_rng = np.random.RandomState(seed + 19997 + extra * 3571)
-            blocks, label = self._try_build_circuit(
-                trial_rng, lane_num, lane_width, parent_node_path, physics_world, minimal=True
-            )
-            if blocks is not None:
-                self.blocks = blocks
-                self.circuit_label = label
-                self.circuit_segments = len(blocks) - 1
-                self.road_network.after_init()
-                return
-
-        logger.warning("Basic loop failed, using fallback circle (seed=%s)", seed)
-        self.road_network = self.road_network_type()
         first_block = FirstPGBlock(
             self.road_network,
             lane_width=lane_width,
             lane_num=lane_num,
             render_root_np=parent_node_path,
             physics_world=physics_world,
-            length=self.START_LENGTH,
-            remove_negative_lanes=True,
+            remove_negative_lanes=False,
         )
-        blocks, label = _build_fallback_circle(
-            first_block, self.road_network, lane_num, lane_width, parent_node_path, physics_world
-        )
-        self.blocks = [first_block] + blocks
-        self.circuit_label = label
-        self.circuit_segments = 2
-        self.road_network.after_init()
-
-    def _try_build_circuit(
-        self, rng, lane_num, lane_width, render_np, physics_world,
-        reliable=False, minimal=False, plan_fn=None, symmetric=False,
-    ):
-        road_network = self.road_network_type()
-        first_block = FirstPGBlock(
-            road_network,
-            lane_width=lane_width,
-            lane_num=lane_num,
-            render_root_np=render_np,
-            physics_world=physics_world,
-            length=self.START_LENGTH,
-            remove_negative_lanes=True,
-        )
-        blocks = [first_block]
+        self.blocks.append(first_block)
         last_block = first_block
-        if plan_fn is _symmetric_circuit_plan:
-            plan, style = plan_fn(rng, start_length=self.START_LENGTH)
-        elif plan_fn is not None:
-            plan, style = plan_fn(rng)
-        elif minimal:
-            plan, style = _minimal_irregular_plan(rng)
-        elif reliable:
-            plan, style = _reliable_irregular_plan(rng)
-        else:
-            plan, style = _circuit_plan(rng)
-        labels = []
         block_index = 1
-        block_seed = int(rng.randint(0, 10000))
 
-        for block_cls, cfg, label in plan:
-            block = block_cls(
-                block_index,
-                last_block.get_socket(0),
-                road_network,
-                block_seed,
-                remove_negative_lanes=True,
-                ignore_intersection_checking=True,
-            )
-            block.construct_from_config(cfg, render_np, physics_world)
-            blocks.append(block)
+        for segment in TRACK_SEGMENTS:
+            if segment[0] == "straight":
+                _, length = segment
+                block = Straight(
+                    block_index,
+                    last_block.get_socket(0),
+                    self.road_network,
+                    0,
+                    remove_negative_lanes=False,
+                    ignore_intersection_checking=True,
+                )
+                block.construct_from_config({Parameter.length: float(length)}, parent_node_path, physics_world)
+            else:
+                _, radius, angle, direction = segment
+                block = Curve(
+                    block_index,
+                    last_block.get_socket(0),
+                    self.road_network,
+                    0,
+                    remove_negative_lanes=False,
+                    ignore_intersection_checking=True,
+                )
+                block.construct_from_config(
+                    {
+                        Parameter.length: CURVE_TAIL,
+                        Parameter.radius: float(radius),
+                        Parameter.angle: float(angle),
+                        Parameter.dir: int(direction),
+                    },
+                    parent_node_path,
+                    physics_world,
+                )
+            self.blocks.append(block)
             last_block = block
-            labels.append(label)
             block_index += 1
 
-        if symmetric:
-            pre_gap_tol = 48.0
-            final_gap_tol = 40.0
-            max_close_blocks = 1
-        elif plan_fn is not None:
-            pre_gap_tol = 42.0
-            final_gap_tol = 36.0
-            max_close_blocks = 2
-        elif minimal:
-            pre_gap_tol = 40.0
-            final_gap_tol = 34.0
-            max_close_blocks = 2
-        elif reliable:
-            pre_gap_tol = 38.0
-            final_gap_tol = 32.0
-            max_close_blocks = 2
-        else:
-            pre_gap_tol = self.PRE_CLOSE_GAP_TOL
-            final_gap_tol = self.FINAL_GAP_TOL
-            max_close_blocks = 2
-
-        pre_gap, pre_heading = _pre_close_gap(last_block, road_network)
-        if pre_gap > pre_gap_tol or pre_heading > CLOSE_HEADING_TOL:
-            self._cleanup_blocks(blocks, physics_world)
-            return None, None
-
+        pre_gap, pre_heading = _pre_close_gap(last_block, self.road_network)
         ok, last_block, close_blocks, gap = _force_close_with_blocks(
-            last_block, road_network, render_np, physics_world, block_index, block_seed
+            last_block, self.road_network, parent_node_path, physics_world, block_index, 0
         )
-        if not ok or len(close_blocks) > max_close_blocks or gap > final_gap_tol:
-            self._cleanup_blocks(blocks + close_blocks, physics_world)
-            return None, None
-
-        blocks.extend(close_blocks)
-
-        if _network_has_crossings(road_network):
-            self._cleanup_blocks(blocks, physics_world)
-            return None, None
-
-        if not _validate_spawn_lane(road_network):
-            self._cleanup_blocks(blocks, physics_world)
-            return None, None
-
-        seq = "".join(labels)
-        if "L" not in seq or "R" not in seq:
-            self._cleanup_blocks(blocks, physics_world)
-            return None, None
-
-        self.road_network = road_network
-        n_left = seq.count("L")
-        n_right = seq.count("R")
-        label = f"{style} {len(plan)}seg [{seq}] Lx{n_left} Rx{n_right} gap={gap:.1f}m nocross"
-        return blocks, label
-
-    @staticmethod
-    def _cleanup_blocks(blocks, physics_world):
-        for block in reversed(blocks):
-            if hasattr(block, "destruct_block"):
-                try:
-                    block.destruct_block(physics_world)
-                except (ValueError, AttributeError):
-                    pass
-            try:
-                block.destroy()
-            except Exception:
-                pass
+        if not ok or gap > self.FINAL_GAP_TOL:
+            raise RuntimeError(
+                f"Failed to close track loop (pre_gap={pre_gap:.1f}m, final_gap={gap:.1f}m, "
+                f"heading_err={pre_heading:.3f})"
+            )
+        self.blocks.extend(close_blocks)
+        self.close_gap_m = float(gap)
+        self.road_network.after_init()
+        logger.info("Track loop closed with gap=%.1fm (pre=%.1fm)", gap, pre_gap)
 
 
-class LoopMapManager(PGMapManager):
-    """Build one random circuit per scenario seed."""
-
+class SimpleTrackMapManager(PGMapManager):
     def reset(self):
         config = self.engine.global_config.copy()
         current_seed = self.engine.global_seed
-
         if self.maps[current_seed] is None:
-            map_config = config["map_config"].copy()
-            map_config["seed"] = current_seed
-            loop_map = self.spawn_object(LoopMap, map_config=map_config, random_seed=None)
-            self.current_map = loop_map
+            track_map = self.spawn_object(SimpleTrackMap, map_config=config["map_config"], random_seed=None)
+            self.current_map = track_map
             if config["store_map"]:
-                self.maps[current_seed] = loop_map
+                self.maps[current_seed] = track_map
         else:
-            loop_map = self.maps[current_seed]
+            self.current_map = self.maps[current_seed]
+        self.load_map(self.current_map)
 
-        self.load_map(loop_map)
 
-
-class LoopMetaDriveEnv(MetaDriveEnv):
-    """MetaDriveEnv with a random closed circuit; laps do not end the episode."""
+class SimpleTrackEnv(MetaDriveEnv):
+    # Default terrain is 2048 m centered at origin; this track spans ~2060 m and
+    # is offset in Y, so raise region size and re-center terrain on the map.
+    MAP_REGION_SIZE = 4096
 
     def setup_engine(self):
         super().setup_engine()
-        self.engine.update_manager("map_manager", LoopMapManager())
+        self.engine.update_manager("map_manager", SimpleTrackMapManager())
 
     def _post_process_config(self, config):
         config = super()._post_process_config(config)
+        config["map_region_size"] = self.MAP_REGION_SIZE
+        config.update(get_render_config())
+        config["horizon"] = None
         config["agent_configs"][DEFAULT_AGENT]["spawn_lane_index"] = (
             FirstPGBlock.NODE_2,
             MERGE_NODE,
@@ -839,9 +538,75 @@ class LoopMetaDriveEnv(MetaDriveEnv):
         )
         return config
 
+    def reset(self, seed=None):
+        obs, info = super().reset(seed=seed)
+        self._loop_arrival_flags = {}
+        if self.engine is not None and getattr(self.engine, "terrain", None) is not None:
+            center = self.current_map.get_center_point()
+            self.engine.terrain.reset(center)
+            for _ in range(5):
+                self.engine.graphicsEngine.renderFrame()
+        return obs, info
+
+    def _maybe_restart_loop_navigation(self, vehicle_id: str):
+        """Re-plan the route after crossing the finish line so laps can continue."""
+        if vehicle_id not in self.agents:
+            return
+        vehicle = self.agents[vehicle_id]
+        if not self._is_arrive_destination(vehicle):
+            self._loop_arrival_flags[vehicle_id] = False
+            return
+        if self._loop_arrival_flags.get(vehicle_id, False):
+            return
+        vehicle.reset_navigation()
+        self._loop_arrival_flags[vehicle_id] = True
+
+    def step(self, actions):
+        ret = super().step(actions)
+        for vehicle_id in self.agents:
+            self._maybe_restart_loop_navigation(vehicle_id)
+        return ret
+
     def done_function(self, vehicle_id: str):
         done, done_info = super().done_function(vehicle_id)
         if done_info[TerminationState.SUCCESS]:
             done = False
             done_info[TerminationState.SUCCESS] = False
         return done, done_info
+
+
+def _track_summary():
+    parts = []
+    for segment in TRACK_SEGMENTS:
+        if segment[0] == "straight":
+            parts.append(f"S{segment[1]:g}m")
+        else:
+            _, radius, angle, direction = segment
+            turn = "R" if direction == RIGHT else "L"
+            parts.append(f"{turn}{angle:g}@R{radius:g}")
+    return " -> ".join(parts)
+
+
+def export_track_png(output_path=OUTPUT_PNG, resolution=(2048, 2048), seed=0):
+    env = SimpleTrackEnv(
+        dict(
+            use_render=False,
+            num_scenarios=1,
+            traffic_density=0,
+            map_config=dict(lane_num=LANE_NUM, lane_width=LANE_WIDTH),
+        )
+    )
+    try:
+        env.reset(seed=seed)
+        img = draw_top_down_map(env.current_map, resolution=resolution, semantic_map=True)
+        cv2.imwrite(output_path, img)
+        print(f"Saved: {output_path} ({resolution[0]}x{resolution[1]})")
+        print(f"Loop close gap: {getattr(env.current_map, 'close_gap_m', '?')} m")
+        print(_track_summary())
+        return output_path
+    finally:
+        env.close()
+
+
+if __name__ == "__main__":
+    export_track_png()

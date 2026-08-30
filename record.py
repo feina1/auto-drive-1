@@ -23,7 +23,7 @@ from runtime_config import (
     get_expert_fn,
     get_render_config,
 )
-from simple_track import (
+from loop_map import (
     LANE_NUM,
     LANE_WIDTH,
     TARGET_SPEED_KMH,

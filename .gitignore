@@ -22,6 +22,7 @@ Thumbs.db
 
 # Local notes / temp
 plan.txt
+backup/
 
 # Local dev launcher (machine-specific)
 dev_env.bat
