@@ -8,6 +8,7 @@ matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
+from runtime_config import get_render_config
 from simple_track import (
     LANE_NUM,
     LANE_WIDTH,
@@ -333,19 +334,20 @@ def load_reference_path():
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("PID 自动驾驶 - 无头模式 + BEV 可视化")
+    print("PID 自动驾驶 - MetaDrive 3D 可视化")
     print("=" * 60)
 
     ref_path_x, ref_path_y = load_reference_path()
 
-    # ---- 无头模式配置 ----
+    # ---- MetaDrive 3D 可视化模式 ----
     config = dict(
-        use_render=False,           # 不打开 3D 窗口！
+        use_render=True,            # 打开 3D 窗口
         manual_control=False,
         traffic_density=0.0,
         num_scenarios=1,
         start_seed=0,
         map_region_size=4096,
+        **get_render_config(),
         random_lane_width=False,
         random_lane_num=False,
         out_of_route_done=False,
@@ -361,7 +363,7 @@ if __name__ == "__main__":
         vehicle_config=dict(
             show_navi_mark=False,
             show_line_to_navi_mark=False,
-            show_lidar=False,
+            show_lidar=True,
             spawn_velocity=[TARGET_SPEED_KMH / 3.6, 0.0],
             spawn_velocity_car_frame=True,
         ),
@@ -394,7 +396,7 @@ if __name__ == "__main__":
         origin_xy = np.array(env.agent.position[:2], dtype=float)
         lap_counter = LapCounter(origin_xy)
 
-        print(f"\n✓ 环境初始化完成 (无头模式)")
+        print(f"\n✓ 环境初始化完成 (3D 可视化模式)")
         print(f"  目标速度: {TARGET_SPEED_KMH:.0f} km/h")
         print(f"  起始位置: ({origin_xy[0]:.2f}, {origin_xy[1]:.2f})")
 
