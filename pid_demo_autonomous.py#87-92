@@ -1,0 +1,5 @@
+    tx = float(path_x[i])
+    ty = float(path_y[i])
+    d2 = (tx - x)**2 + **(ty - y)2
+    if d2 > lookahead_dist**2:
+        break
