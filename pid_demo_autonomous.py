@@ -371,24 +371,9 @@ if __name__ == "__main__":
 
     env = SimpleTrackEnv(config)
     follower = None
-    bev = None
 
     try:
         env.reset(seed=0)
-
-        # 导出地图 + 路径 JPG
-        export_map_jpg(env, ref_path_x, ref_path_y)
-
-        # 获取地图边界
-        b_box = env.current_map.road_network.get_bounding_box()
-        margin = 100
-        map_bounds = (
-            b_box[0] - margin, b_box[1] + margin,
-            b_box[2] - margin, b_box[3] + margin,
-        )
-
-        # 创建 BEV 可视化
-        bev = BEVVisualizer(ref_path_x, ref_path_y, map_bounds)
 
         # 创建控制器
         follower = PathFollower(ref_path_x, ref_path_y)
@@ -403,12 +388,11 @@ if __name__ == "__main__":
         prev_laps = 0
         frame = 0
         dt = 0.1
-        max_frames = 50000  # 安全上限
 
-        print(f"\n开始驾驶... (关闭 BEV 窗口或 Ctrl+C 退出)")
+        print(f"\n开始驾驶... (按 ESC 退出)")
         print("-" * 60)
 
-        while frame < max_frames:
+        while True:
             vehicle_x, vehicle_y = float(env.agent.position[0]), float(env.agent.position[1])
             vehicle_heading = float(env.agent.heading_theta)
             vehicle_speed_km_h = float(env.agent.speed_km_h)
@@ -427,12 +411,16 @@ if __name__ == "__main__":
 
             lat_err = follower.log_data[-1]['lateral_error'] if follower.log_data else 0.0
 
-            # 每 5 帧更新一次 BEV（避免太卡）
-            if frame % 5 == 0:
-                bev.update(
-                    vehicle_x, vehicle_y, vehicle_heading,
-                    vehicle_speed_km_h, action[0], lat_err, laps, frame
-                )
+            env.render(
+                text={
+                    "Speed (km/h)": f"{vehicle_speed_km_h:.1f}",
+                    "Steering": f"{action[0]:.3f}",
+                    "Throttle": f"{action[1]:.3f}",
+                    "Lat Err (m)": f"{lat_err:.2f}",
+                    "Laps": str(laps),
+                    "Control": "PID+PurePursuit",
+                }
+            )
 
             if frame % 200 == 0:
                 print(f"Frame {frame:5d} | Speed: {vehicle_speed_km_h:5.1f} km/h | "
@@ -441,17 +429,11 @@ if __name__ == "__main__":
 
             frame += 1
 
-        # 结束保存
-        bev.save_snapshot('bev_final.png')
-
     except KeyboardInterrupt:
         print("\n\n用户中断")
     finally:
         if follower:
             follower.save_log()
-        if bev:
-            bev.save_snapshot('bev_snapshot.png')
-            bev.close()
         env.close()
         print(f"\n✓ 演示结束 (共 {frame} 帧)")
         print("=" * 60)
