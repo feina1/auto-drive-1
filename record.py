@@ -29,8 +29,6 @@ from loop_map import (
     TARGET_SPEED_KMH,
     LapCounter,
     SimpleTrackEnv,
-    spawn_nearby_traffic,
-    spawn_track_traffic,
 )
 
 RECORD_HZ = 10
@@ -165,13 +163,6 @@ def _build_env_config():
         out_of_route_done=False,
         on_continuous_line_done=False,
         map_config=dict(lane_num=LANE_NUM, lane_width=LANE_WIDTH),
-        traffic_vehicle_config=dict(
-            show_navi_mark=False,
-            show_dest_mark=False,
-            show_lidar=False,
-            show_lane_line_detector=False,
-            show_side_detector=False,
-        ),
         vehicle_config=dict(
             show_navi_mark=False,
             show_line_to_navi_mark=False,
@@ -237,11 +228,8 @@ def main():
     env = SimpleTrackEnv(config)
     try:
         env.reset(seed=0)
-        spawn_nearby_traffic(env, count=14, gap_m=35.0, target_speed_kmh=TARGET_SPEED)
-        spawn_track_traffic(env, num_vehicles=24, target_speed_kmh=TARGET_SPEED)
         lap_counter = LapCounter(np.array(env.agent.position[:2], dtype=float))
         env.agent.expert_takeover = True
-        env.engine.force_fps.disable()
 
         print(HELP_MESSAGE)
         print(f"Recording to: {session_dir}")
