@@ -1,0 +1,2 @@
+# Install into the existing project venv (PyTorch, NumPy and Pillow already required).
+transformers==4.56.2

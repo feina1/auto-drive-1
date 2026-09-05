@@ -37,7 +37,7 @@ Step 3：Front RGB
 | -------- | ------------------------- | ----------------------------- | ---------------------------- | --------------------- | ----------------------------- |
 | Step 1   | 验证循迹控制                    | GT Trajectory + Vehicle State | Pure Pursuit + P/PID         | Vehicle Control       | Closed-loop L2、Off-road       |
 | Plan 1.5 | 录制并生成 GT 训练集              | Pose + RGB + 中心线              | GT V0 / V1 Labeler           | Ego Waypoints Dataset | 标签可视化、Dataset 可训练             |
-| Step 2   | 验证最简单 Vision-to-Waypoints | Front RGB                     | DINOv3 + Waypoint Head       | Ego Waypoints         | Waypoint L2、Closed-loop L2    |
+| Step 2   | 验证最简单 Vision-to-Waypoints | Front RGB                     | DINOv2 + Waypoint Head       | Ego Waypoints         | Waypoint L2、Closed-loop L2    |
 | Step 3   | 验证 VLA 是否改善规划能力           | Front RGB                     | Vision Encoder + VLA Planner | Ego Waypoints         | Waypoint L2、Closed-loop L2、泛化 |
 
 
@@ -83,7 +83,7 @@ Mean L2 稳定、不逐圈发散
 
 # Step 1.5：录制生成 GT 训练集
 
-Step 1 验证闭环控制；Plan 1.5 在此基础上**离线录制 + 标注 GT Waypoints**，为 Step 2 的 Dataset / DINOv3 pipeline 提供监督信号。
+Step 1 验证闭环控制；Plan 1.5 在此基础上**离线录制 + 标注 GT Waypoints**，为 Step 2 的 Dataset / DINOv2 pipeline 提供监督信号。
 
 ## 总体流程
 
@@ -96,7 +96,7 @@ GT Labeler（V0 → V1）
         ↓
 Dataset：{image, ego_state, gt_waypoints, meta}
         ↓
-Step 2：DINOv3 + Waypoint Head 训练
+Step 2：DINOv2 + Waypoint Head 训练
 ```
 
 ## 前置依赖（与 Step 1 共用）
@@ -112,7 +112,7 @@ Step 2：DINOv3 + Waypoint Head 训练
 
 ## GT V0：中心线 Oracle（先跑通 pipeline）
 
-**目标**：用最简单的规则 GT，先把 **Dataset → DINOv3 → Waypoint Head → 训练/评估** 整条链路跑通。
+**目标**：用最简单的规则 GT，先把 **Dataset → DINOv2 → Waypoint Head → 训练/评估** 整条链路跑通。
 
 ### 生成逻辑
 
@@ -223,63 +223,34 @@ Step 2 在大偏差场景 closed-loop 优于仅 V0 训练（后续验证）
 | 3   | 闭环录制脚本（RGB + pose + GT）         | raw episodes        |
 | 4   | Dataset 打包 + Step 2 dataloader  | train/val split     |
 | 5   | GT V1 Frenet recovery labeler   | `gt_waypoints_v1`   |
-| 6   | 混合数据集训练 DINOv3 baseline         | Step 2 pipeline 跑通  |
+| 6   | 混合数据集训练 DINOv2 baseline         | Step 2 pipeline 跑通  |
 
 
 ---
 
 # Step 2：纯视觉一段式方案
 
-## 方案
+## 2.1 循迹训练
 
-不做传统感知，直接从前视图像预测 Waypoints：
+相关逻辑统一放在 `model/follow_path.py`，分为三部分：
 
-```text
-Front RGB
-    ↓
-DINOv3 Vision Encoder
-    ↓
-Visual Features / Tokens
-    ↓
-Simple Waypoint Head
-    ↓
-Ego Waypoints
-    ↓
-Step 1 Controller
-```
+### dataset：生成循迹训练数据
 
-第一版：
+- 从 `records/train` 读取数据。
+- 输入只取单帧 front RGB 和自车速度。
+- 监督标签为对应的 GT ego waypoints。
 
-```text
-DINOv3：Frozen
-Waypoint Head：Trainable MLP
-```
+### model：模型设计
 
-输出：
+- 单帧图片经预训练 DINOv2 ViT-S/14 提取特征，再与自车速度拼接融合。
+- 权重无需登录，首次下载到 `model/.cache/huggingface`，后续优先复用本地缓存。
+- 使用简单 MLP 输出 ego 坐标系下的 waypoints：`[(x1, y1), ..., (xN, yN)]`。
+- 初版冻结 DINOv2，只训练 MLP。
 
-```text
-[(x1,y1), ..., (xN,yN)]
-```
+### 训练
 
-统一采用 ego 坐标系。
-
-## 评价
-
-Open-loop：
-
-```text
-Predicted Waypoints vs GT Waypoints
-→ Mean Waypoint L2
-```
-
-Closed-loop：
-
-```text
-Actual Vehicle Trajectory vs GT Trajectory
-→ Mean L2 + Off-road
-```
-
-Step 2 是后续 VLA 的核心 Baseline。
+- 使用预测 waypoints 与 GT waypoints 的 MSE 作为简单循迹 loss。
+- 先跑通数据读取、前向预测和训练，使 loss 正常下降。
 
 ---
 
@@ -307,14 +278,14 @@ Ego Waypoints
 同一个 Controller
 ```
 
-第一版优先考虑复用 Step 2 的 DINOv3：
+第一版优先考虑复用 Step 2 的 DINOv2：
 
 ```text
 Step 2：
 
 RGB
  ↓
-DINOv3
+DINOv2
  ↓
 MLP
  ↓
@@ -325,7 +296,7 @@ Step 3：
 
 RGB
  ↓
-DINOv3
+DINOv2
  ↓
 Visual Tokens
  ↓
@@ -340,7 +311,7 @@ Waypoints
 
 当前阶段**不重点研究自然语言交互**。
 
-如果采用现成 VLA/VLM，也可以使用模型自带的 Vision Encoder，不强制使用 DINOv3。
+如果采用现成 VLA/VLM，也可以使用模型自带的 Vision Encoder，不强制使用 DINOv2。
 
 ## 评价
 
@@ -388,7 +359,7 @@ Training Dataset
         ↓
 
 Step 2
-RGB → DINOv3 → Waypoint Head
+RGB → DINOv2 → Waypoint Head
                     ↓
                  Waypoints
                     ↓
@@ -410,4 +381,3 @@ RGB → Vision Encoder → Visual Tokens
 
 1. **纯视觉一段式方案是否能够完成稳定闭环驾驶？**
 2. **在相同任务下，引入 VLA 后是否真正提升驾驶与泛化能力，而不仅仅增加语言交互能力？**
-
