@@ -30,3 +30,4 @@ start_env.bat
 
 # Recorded datasets
 records/
+records_pid/
