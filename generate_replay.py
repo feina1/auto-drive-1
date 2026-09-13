@@ -70,7 +70,30 @@ def load_session(session_dir: Path):
     return metadata, frames, ref_x_ds, ref_y_ds
 
 
-def generate_html(session_dir: Path, metadata, frames, ref_x, ref_y) -> str:
+def detect_lap_frames(frames, finish_radius=40.0, min_travel_m=5000.0):
+    """检测每次回到起点附近的帧索引 (完成一圈的点)."""
+    if not frames:
+        return []
+    origin_x, origin_y = frames[0]["x"], frames[0]["y"]
+    lap_frames = []  # 每圈结束时的帧索引
+    travel_m = 0.0
+    inside_finish = True
+    last_x, last_y = origin_x, origin_y
+    for i, f in enumerate(frames):
+        x, y = f["x"], f["y"]
+        travel_m += ((x - last_x) ** 2 + (y - last_y) ** 2) ** 0.5
+        last_x, last_y = x, y
+        dist = ((x - origin_x) ** 2 + (y - origin_y) ** 2) ** 0.5
+        if dist >= finish_radius:
+            inside_finish = False
+        elif not inside_finish and travel_m >= min_travel_m:
+            lap_frames.append(i)
+            travel_m = 0.0
+            inside_finish = True
+    return lap_frames
+
+
+def generate_html(session_dir: Path, metadata, frames, ref_x, ref_y, lap_frames) -> str:
     """生成自包含的 HTML 回放页面。"""
     # 计算世界坐标范围 (参考路径 + 轨迹)
     all_x = ref_x + [f["x"] for f in frames]
@@ -83,10 +106,16 @@ def generate_html(session_dir: Path, metadata, frames, ref_x, ref_y) -> str:
     y_min -= margin
     y_max += margin
 
+    total_laps = len(lap_frames) + 1  # 完成的圈数 + 当前正在跑的圈
+    # 每圈结束时间 (秒)
+    lap_times = [round(f / metadata.get("record_hz", 10), 1) for f in lap_frames]
+
     # 数据 JSON (紧凑格式)
     data_json = json.dumps({
         "fps": metadata.get("record_hz", 10),
-        "laps": metadata.get("record_laps", 3),
+        "total_laps": total_laps,
+        "lap_frames": lap_frames,
+        "lap_times": lap_times,
         "ref": {"x": ref_x, "y": ref_y},
         "frames": frames,
         "bounds": [x_min, x_max, y_min, y_max],
@@ -127,7 +156,7 @@ canvas {{ background: #111; border-radius: 4px; }}
 <body>
 <div class="header">
   <h1>PID 录制回放</h1>
-  <div class="info">{session_dir.name} | {len(frames)} 帧 | {metadata.get('record_hz', 10)} FPS</div>
+  <div class="info">{session_dir.name} | {len(frames)} 帧 | {metadata.get('record_hz', 10)} FPS | {total_laps} 圈</div>
 </div>
 <div class="main">
   <div class="left">
@@ -146,6 +175,9 @@ canvas {{ background: #111; border-radius: 4px; }}
           <option value="1" selected>1x</option>
           <option value="2">2x</option>
           <option value="4">4x</option>
+          <option value="10">10x</option>
+          <option value="20">20x</option>
+          <option value="30">30x</option>
         </select>
       </div>
       <div class="controls-row">
@@ -157,6 +189,8 @@ canvas {{ background: #111; border-radius: 4px; }}
         <span class="value" id="frame-label">0 / {len(frames)-1}</span>
         <span class="label" style="margin-left:20px;">位置:</span>
         <span class="value" id="pos-label">-</span>
+        <span class="label" style="margin-left:20px;">圈:</span>
+        <span class="value" id="lap-label">1/{total_laps}</span>
       </div>
     </div>
   </div>
@@ -169,6 +203,7 @@ canvas {{ background: #111; border-radius: 4px; }}
       <span style="background:#ffd700; margin-left:12px; opacity:0.6;"></span>完整轨迹
       <span style="background:#ff4a4a; margin-left:12px;"></span>已播放
       <span style="background:#ff4a4a; margin-left:12px; border-radius:50%;"></span>当前位置
+      <span style="background:#00ff88; margin-left:12px; font-size:14px;">&#9733;</span>圈结束点
     </div>
   </div>
 </div>
@@ -178,6 +213,9 @@ const frames = DATA.frames;
 const refPath = DATA.ref;
 const bounds = DATA.bounds;
 const fps = DATA.fps;
+const totalLaps = DATA.total_laps;
+const lapFrames = DATA.lap_frames;
+const lapTimes = DATA.lap_times;
 
 let currentFrame = 0;
 let playing = false;
@@ -189,6 +227,7 @@ const imgEl = document.getElementById('frame-img');
 const slider = document.getElementById('progress-slider');
 const frameLabel = document.getElementById('frame-label');
 const posLabel = document.getElementById('pos-label');
+const lapLabel = document.getElementById('lap-label');
 const btnPlay = document.getElementById('btn-play');
 const canvas = document.getElementById('bev-canvas');
 const ctx = canvas.getContext('2d');
@@ -253,6 +292,20 @@ function drawBEV() {{
     ctx.stroke();
   }}
 
+  // 绘制圈结束点 (绿色星号)
+  for (let li = 0; li < lapFrames.length; li++) {{
+    const fi = lapFrames[li];
+    const [lx, ly] = worldToCanvas(frames[fi].x, frames[fi].y);
+    ctx.fillStyle = '#00ff88';
+    ctx.font = 'bold 16px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('\u2605', lx, ly);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 10px sans-serif';
+    ctx.fillText('' + (li + 1), lx, ly + 12);
+  }}
+
   // 绘制当前位置红点
   const [cx, cy] = worldToCanvas(frames[currentFrame].x, frames[currentFrame].y);
   ctx.fillStyle = '#ff4a4a';
@@ -282,6 +335,12 @@ function updateDisplay() {{
   slider.value = currentFrame;
   frameLabel.textContent = `${{currentFrame}} / ${{frames.length - 1}}`;
   posLabel.textContent = `(${{frames[currentFrame].x.toFixed(1)}}, ${{frames[currentFrame].y.toFixed(1)}})`;
+  // 计算当前圈数 (第几圈, 从1开始)
+  let curLap = 1;
+  for (let i = 0; i < lapFrames.length; i++) {{
+    if (currentFrame >= lapFrames[i]) curLap = i + 2;
+  }}
+  lapLabel.textContent = curLap + '/' + totalLaps;
   drawBEV();
 }}
 
@@ -379,15 +438,25 @@ def main():
     metadata, frames, ref_x, ref_y = load_session(session_dir)
     print(f"加载 {len(frames)} 帧 | 参考路径 {len(ref_x)} 点")
 
-    html = generate_html(session_dir, metadata, frames, ref_x, ref_y)
+    lap_frames = detect_lap_frames(frames)
+    if lap_frames:
+        hz = metadata.get("record_hz", 10)
+        print(f"检测到 {len(lap_frames)} 圈:")
+        for i, fi in enumerate(lap_frames):
+            print(f"  第 {i+1} 圈结束: frame {fi} (t={fi/hz:.0f}s)")
+    else:
+        print("未检测到完整圈数")
+
+    html = generate_html(session_dir, metadata, frames, ref_x, ref_y, lap_frames)
     output_path = session_dir / "replay.html"
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"✓ 生成回放页面: {output_path}")
 
     if auto_open:
-        import subprocess
-        subprocess.run(["open", str(output_path)], check=False)
+        import subprocess, platform
+        cmd = "open" if platform.system() == "Darwin" else "xdg-open"
+        subprocess.run([cmd, str(output_path)], check=False)
         print(f"已在浏览器中打开")
 
 
