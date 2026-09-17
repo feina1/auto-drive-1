@@ -31,5 +31,11 @@ start_env.bat
 # Recorded datasets
 records/
 records_pid/
+records_perturbed/
 
-plan/
+# Training data (too large for GitHub)
+train/data/
+train/dino*
+
+# Videos (not committed)
+videos/
