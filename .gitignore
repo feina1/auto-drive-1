@@ -35,7 +35,9 @@ records_perturbed/
 
 # Training data (too large for GitHub)
 train/data/
-train/dino*
+
+# DINOv3 weights (download via: bash components/dinov3/download_weights.sh)
+components/dinov3/weights/
 
 # Videos (not committed)
 videos/

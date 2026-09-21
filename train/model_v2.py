@@ -4,9 +4,16 @@
 输入: 1 帧 RGB → DINOv3 → [384] → MLP → [20, 2] waypoints
 """
 from __future__ import annotations
+import sys
 from pathlib import Path
 import torch
 import torch.nn as nn
+
+# 添加项目根目录到 sys.path, 以导入公共组件
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+from components.dinov3 import get_model_path
 
 
 class WaypointHead(nn.Module):
@@ -59,7 +66,7 @@ class FullModel(nn.Module):
 def build_model(device="cuda"):
     """构建完整模型."""
     from transformers import AutoModel, AutoImageProcessor
-    MODEL_PATH = str(Path(__file__).resolve().parent / "dinov3-weights" / "vits16")
+    MODEL_PATH = get_model_path()
     
     encoder = AutoModel.from_pretrained(MODEL_PATH).to(device)
     encoder.eval()
@@ -73,7 +80,7 @@ def build_model(device="cuda"):
 def count_params(model):
     total = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    return total, trainable
+    return total, trainable 
 
 
 if __name__ == "__main__":

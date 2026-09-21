@@ -16,6 +16,7 @@ from transformers import AutoImageProcessor, AutoModel
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from components.dinov3 import get_model_path
 from metadrive.component.sensors.rgb_camera import RGBCamera
 from simple_track import LANE_NUM, LANE_WIDTH, TARGET_SPEED_KMH, LapCounter, SimpleTrackEnv
 from pid_demo_autonomous import PathFollower
@@ -24,8 +25,8 @@ from runtime_config import get_render_config
 from model_v2 import WaypointHead
 
 TRAIN_DIR = Path(__file__).resolve().parent
-REF_FILE = str(PROJECT_ROOT / "simple_track_reference_clean.json")
-MODEL_PATH = str(TRAIN_DIR / "dinov3-weights" / "vits16")
+REF_FILE = str(PROJECT_ROOT / "simple_track_reference_lane_center.json")
+MODEL_PATH = get_model_path()
 CKPT_FILE = str(TRAIN_DIR / "checkpoints" / "best_model.pt")
 
 CAMERA_W, CAMERA_H, CAMERA_FOV = 640, 360, 60
@@ -125,10 +126,11 @@ def main():
     ref_y = np.array(json.load(open(REF_FILE))["reference_path"]["y"])
 
     config = dict(
-        use_render=True, manual_control=False, traffic_density=0.0,
+        use_render=False, manual_control=False, traffic_density=0.0,
         num_scenarios=1, start_seed=0, map_region_size=4096,
         window_size=(480, 270), show_interface=False,
         show_logo=False, show_fps=False, camera_fov=CAMERA_FOV,
+        image_observation=True, norm_pixel=False,
         sensors=dict(rgb_camera=(RGBCamera, CAMERA_W, CAMERA_H)),
         image_on_cuda=True, multi_thread_render=True, render_pipeline=False,
         random_lane_width=False, random_lane_num=False,
@@ -141,6 +143,7 @@ def main():
         vehicle_config=dict(
             show_navi_mark=False, show_line_to_navi_mark=False, show_lidar=True,
             spawn_velocity=[TARGET_SPEED / 3.6, 0.0], spawn_velocity_car_frame=True,
+            image_source="rgb_camera",
         ),
     )
 

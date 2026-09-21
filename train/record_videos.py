@@ -15,6 +15,7 @@ from PIL import Image
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from components.dinov3 import get_model_path
 from metadrive.component.sensors.rgb_camera import RGBCamera
 from simple_track import LANE_NUM, LANE_WIDTH, TARGET_SPEED_KMH, LapCounter, SimpleTrackEnv
 from pid_demo_autonomous import PathFollower
@@ -24,7 +25,7 @@ from model_v2 import WaypointHead
 
 TRAIN_DIR = PROJECT_ROOT / "train"
 REF_FILE = str(PROJECT_ROOT / "simple_track_reference_clean.json")
-MODEL_PATH = str(TRAIN_DIR / "dinov3-weights" / "vits16")
+MODEL_PATH = get_model_path()
 CKPT_FILE = str(TRAIN_DIR / "checkpoints" / "best_model.pt")
 VIDEO_DIR = PROJECT_ROOT / "videos"
 VIDEO_DIR.mkdir(exist_ok=True)
