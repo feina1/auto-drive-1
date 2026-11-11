@@ -41,3 +41,10 @@ components/dinov3/weights/
 
 # Videos (not committed)
 videos/
+*.png
+*.jpg
+*.json
+*.md
+*.csv
+*.npz
+*.log
