@@ -41,7 +41,7 @@ class _Tee:
 def _report(quick: bool):
     """汇总各阶段产物, 生成 output/report.md 并给出验收结论."""
     out = config.OUT_DIR
-    lines = [f"# data_20261111 自测报告", "",
+    lines = [f"# waypoint_pipeline 自测报告", "",
              f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
              f"模式: {'quick 片段' if quick else '整圈'}", ""]
 

@@ -1,4 +1,4 @@
-"""data_20261111 全局配置：时间 waypoints 数据制作 + waypoints 控制器。
+"""waypoint_pipeline 全局配置：时间 waypoints 数据制作 + waypoints 控制器。
 
 约定:
 - 仿真控制频率 10 Hz (decision_repeat=5 x physics 0.02s = 0.1s/step)

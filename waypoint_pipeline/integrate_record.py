@@ -2,9 +2,9 @@
 
 今天不改动 record.py; 后续合并时, 录完一圈后调用:
 
-    from data_20261111.integrate_record import session_to_trajectory
+    from waypoint_pipeline.integrate_record import session_to_trajectory
     traj_path = session_to_trajectory("records/2026-11-11_20-00")
-    # 然后: python3 data_20261111/make_waypoints.py --traj <traj_path>
+    # 然后: python3 waypoint_pipeline/make_waypoints.py --traj <traj_path>
 
 说明:
 - record.py 的 frames/*.json 为 10 Hz, 字段与本管线兼容 (缺 t, 按 frame_id 推算);
