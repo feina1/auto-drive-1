@@ -1,9 +1,10 @@
-"""阶段2: 整圈轨迹 → 时间 waypoints 数据集 (未来 5s, 2Hz, 10 点).
+"""阶段2: 整圈轨迹 → 时间 waypoints 数据集 (未来 3s, 2Hz, 6 点).
 
 核心后处理:
-- 对每一帧 i (时刻 t_i), 取 t_i + 0.5, t_i + 1.0, ..., t_i + 5.0 共 10 个时刻,
+- 对每一帧 i (时刻 t_i), 取 t_i + 0.5, t_i + 1.0, ..., t_i + 3.0 共 WP_COUNT 个时刻,
   在轨迹上按时间线性插值得到世界坐标点;
-- 闭环整圈轨迹: 按圈周期延拓 (圈尾接圈头), 保证每帧都有完整未来 5s;
+- 闭环整圈轨迹: 圈尾已多录 TAIL_EXTRA_S(6s), 真实未来直接可取; 仅最后不足
+  一个时域的窗口按末速度直线延拓 (圈尾是直道, 与原轨迹一致);
 - 开环/片段轨迹: 末尾按最后航向+速度匀速外推;
 - 世界坐标 → ego 车体系 (x 前, y 左), 与 train/collect_data.py 的约定一致。
 
@@ -35,24 +36,33 @@ def world_to_ego(pts_xy: np.ndarray, ego_xy, ego_heading: float) -> np.ndarray:
     return out
 
 
-def _build_interp_arrays(arr: dict, closed_loop: bool, lap_period: float | None):
-    """构造用于未来时刻插值的 (t, x, y) 序列, 闭环时做周期延拓."""
+def _build_interp_arrays(arr: dict, closed_loop: bool):
+    """构造用于未来时刻插值的 (t, x, y) 序列.
+
+    注意: 不再把圈尾"接回圈头"。`lap_time_s` 由终点 40 m 半径触发, 并非严格
+    周期 (实测首末点差 ~77 m), 按它平移会让圈尾帧的 GT 错位几十米; 而采集时
+    已在圈尾多录 TAIL_EXTRA_S(6 s) > 时域(3 s), 真实未来本就录到了。
+    因此只在最后不足一个时域的窗口内, 按末帧速度/航向直线延拓 (该段是直道,
+    匀速延拓与原轨迹一致)。
+    """
     t, x, y = arr["t"], arr["x"], arr["y"]
-    if closed_loop and lap_period is not None and lap_period > 0:
-        # 圈尾之后接圈头 (位置平移一个周期不需要, 闭环位置本身重合),
-        # 延拓两圈以保证最后帧 +5s 仍在插值范围内
-        t_ext = np.concatenate([t, t + lap_period, t + 2 * lap_period])
-        x_ext = np.concatenate([x, x, x])
-        y_ext = np.concatenate([y, y, y])
-        return t_ext, x_ext, y_ext
+    if closed_loop and len(t) >= 2:
+        dt_nom = float(np.median(np.diff(t)))
+        v = float(arr["speed_kmh"][-1]) / 3.6
+        h = float(arr["heading"][-1])
+        n_ext = int(np.ceil(config.WP_HORIZON_S / max(dt_nom, 1e-6))) + 1
+        dt = np.arange(1, n_ext + 1) * dt_nom
+        t = np.concatenate([t, t[-1] + dt])
+        x = np.concatenate([x, x[-1] + v * np.cos(h) * dt])
+        y = np.concatenate([y, y[-1] + v * np.sin(h) * dt])
     return t, x, y
 
 
 def generate_waypoints(frames: list, metadata: dict):
-    """返回 (wp_ego[N,10,2], wp_world[N,10,2], 使用的帧数组)."""
+    """返回 (wp_ego[N,WP_COUNT,2], wp_world[N,WP_COUNT,2], 使用的帧数组)."""
     arr = tu.frames_to_arrays(frames)
     n = len(arr["t"])
-    offsets = np.arange(1, config.WP_COUNT + 1) * config.WP_DT  # 0.5..5.0
+    offsets = np.arange(1, config.WP_COUNT + 1) * config.WP_DT  # 0.5..3.0
 
     laps = int(metadata.get("laps", 0))
     quick = bool(metadata.get("quick", False))
@@ -67,7 +77,8 @@ def generate_waypoints(frames: list, metadata: dict):
         if lap_period <= config.WP_HORIZON_S:
             closed_loop = False
 
-    t_ext, x_ext, y_ext = _build_interp_arrays(arr, closed_loop, lap_period)
+    t_ext, x_ext, y_ext = _build_interp_arrays(arr, closed_loop)
+    n_tail_ext = int((arr["t"] + config.WP_HORIZON_S > arr["t"][-1]).sum())
 
     wp_world = np.zeros((n, config.WP_COUNT, 2), dtype=np.float64)
     wp_ego = np.zeros_like(wp_world)
@@ -95,7 +106,7 @@ def generate_waypoints(frames: list, metadata: dict):
         wp_ego[i] = world_to_ego(pts, (arr["x"][i], arr["y"][i]), arr["heading"][i])
 
     info = dict(closed_loop=closed_loop, lap_period=lap_period,
-                extrapolated_points=extrapolated)
+                extrapolated_points=extrapolated, tail_frames_extended=n_tail_ext)
     return wp_ego, wp_world, arr, info
 
 
@@ -127,8 +138,8 @@ def build_dataset(traj_path=None, out_prefix=None, verbose: bool = True):
     )
 
     # 数据校验: 相邻 waypoint 间距 ≈ v * 0.5s
-    seg = np.linalg.norm(np.diff(wp_ego, axis=1), axis=2)  # [N,9]
-    expected = arr["speed_kmh"][:, None] / 3.6 * config.WP_DT  # [N,1] → 广播 [N,9]
+    seg = np.linalg.norm(np.diff(wp_ego, axis=1), axis=2)  # [N,WP_COUNT-1]
+    expected = arr["speed_kmh"][:, None] / 3.6 * config.WP_DT  # [N,1] → 广播 [N,WP_COUNT-1]
     with np.errstate(invalid="ignore", divide="ignore"):
         rel_err = np.abs(seg - expected) / np.maximum(expected, 0.5)
     valid = np.broadcast_to(expected > 0.5, rel_err.shape)  # 低速帧间距校验无意义

@@ -1,6 +1,6 @@
 """阶段3: waypoints → (steer, throttle) 几何控制器.
 
-输入: 当前帧 ego 系 waypoints [10,2] (x前 y左, 米) + 当前车速。
+输入: 当前帧 ego 系 waypoints [WP_COUNT,2] (x前 y左, 米) + 当前车速。
 GeometricController: Pure Pursuit + 可选横向偏移修正 + PID 控速 + 曲率前瞻限速。
 
 输出动作约定与 MetaDrive env.step 一致: [steering, throttle_brake],
@@ -124,6 +124,7 @@ class GeometricController:
 
         # ---- 纵向: 曲率前瞻限速 + PID ----
         kappa = polyline_curvature(pts)
+        # 前瞻窗口会被时域截断: 6 点只有 5 段曲率 (覆盖 ~2.5s), 不会越界
         n_preview = max(1, int(p["curve_preview_s"] / config.WP_DT))
         kmax = float(np.max(kappa[:n_preview])) if len(kappa) else 0.0
         v_curve = np.sqrt(p["lat_acc_max"] / kmax) if kmax > 1e-4 else np.inf

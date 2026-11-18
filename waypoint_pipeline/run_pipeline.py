@@ -57,8 +57,9 @@ def _report(quick: bool):
                   + (f", 每 {meta['image_interval_s']:.0f} s 一帧 → output/images/" if meta.get('num_images') else " (未采集)"),
                   f"- waypoints: 每帧 {meta['wp_count']} 点 = 未来 {meta['wp_horizon_s']} s @ "
                   f"{meta['wp_freq_hz']} Hz, ego 系 (x前 y左)",
-                  f"- 闭环周期延拓: {meta['closed_loop']} (周期 {meta.get('lap_period')} s), "
-                  f"外推点数: {meta['extrapolated_points']}",
+                  f"- 整圈录制: {meta['closed_loop']} (完圈时刻 {meta.get('lap_period')} s), "
+                  f"圈尾直线延拓帧: {meta.get('tail_frames_extended', 0)}, "
+                  f"其余外推点数: {meta['extrapolated_points']}",
                   f"- 间距校验 (相邻点距 ≈ v×0.5s) 中位相对误差: {meta['spacing_median_rel_err']}",
                   f"- 训练/验证: {meta['train_frames']} / {meta['val_frames']} 帧", ""]
 

@@ -92,7 +92,7 @@ def tune(data_path=None, seconds: float = 60.0, start_t: float = 0.0, verbose: b
     lat_tracker = tu.LateralErrorTracker(ref_x, ref_y)
     frames, _ = tu.load_trajectory(traj_path)
     traj_arr = tu.frames_to_arrays(frames)
-    # 片段不能超出轨迹覆盖范围 (末尾 5s 的 waypoints 是外推的, 不用来调参)
+    # 片段不能超出轨迹覆盖范围 (末尾 3s 的 waypoints 是外推的, 不用来调参)
     max_start = float(traj_arr["t"][-1]) - config.WP_HORIZON_S - seconds
     start_t = float(np.clip(start_t, 0.0, max(max_start, 0.0)))
 

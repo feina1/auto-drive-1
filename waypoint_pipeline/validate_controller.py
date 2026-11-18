@@ -1,7 +1,7 @@
 """Controller 验证: 参考线 → 滑动窗口 waypoints → 控制器 → (steer, throttle).
 
 要求见同目录 Controller验证方案.md, 四条已锁定决策:
-  D1 waypoints = 10 点, 不含 t 本身 (折线原点由控制器内部补)
+  D1 waypoints = 6 点 (3 s @ 2 Hz), 不含 t 本身 (折线原点由控制器内部补)
   D2 采样时刻 τ_k = t + 0.5k 连续滑动, 禁止对齐到 0.5 网格
   D3 来源 = 参考线几何 + 当前实测速度沿弧长推进 (不回放专家时间轴)
   D4 控制频率 10 Hz (dt = 0.1 s)
@@ -29,7 +29,7 @@ from controllers import GeometricController, path_from_waypoints, point_at_arc
 from make_waypoints import world_to_ego
 
 WP_DT = config.WP_DT      # 0.5 s  (2 Hz)
-WP_N = config.WP_COUNT    # 10 点   (D1)
+WP_N = config.WP_COUNT    # 6 点   (D1)
 DT = config.SIM_DT        # 0.1 s   (D4: 10 Hz)
 
 # ---- 判据阈值 (方案 §5) ----
@@ -127,7 +127,7 @@ def ego_to_world(pts_ego, ego_xy, heading):
 
 
 def make_wp(ref: ReferencePath, ego_xy, heading: float, v_ms: float):
-    """D2/D3 的实现: s_k = s_car + v·0.5k, k=1..10, 再转当前 ego 系.
+    """D2/D3 的实现: s_k = s_car + v·0.5k, k=1..WP_N, 再转当前 ego 系。
 
     注意: 全程无取整/对齐 —— 滑动相位由 s_car 连续投影与实测速度天然保证。
     """
@@ -206,7 +206,7 @@ def expert_offroad_baseline(traj_path, until_t: float) -> float:
 class SceneOverlay:
     """有头模式下的实时叠加层 (只用于观察, 不参与控制, 也不写入任何判据数据)。
 
-    3D 场景: 当前喂给控制器的 10 个 waypoints (绿折线 + 白刻度), 以及 Pure Pursuit
+    3D 场景: 当前喂给控制器的 WP_N 个 waypoints (绿折线 + 白刻度), 以及 Pure Pursuit
             实际前视点 (红绳 + 黄叉), 用来目视“控制器在看哪里”。
     屏内右下角: 过去 scope_window 秒的 steer / throttle 两条曲线 (滚动)。
 
@@ -309,10 +309,10 @@ class SceneOverlay:
 
     # ---------------------------------------------------------------- 对外
     def draw_waypoints(self, wp_world, look_xy=None):
-        """把当前喂给控制器的 10 个 waypoints 画成 10 个离散球 (不连线)。
+        """把当前喂给控制器的 WP_N 个 waypoints 画成离散球 (不连线)。
 
         颜色由近到远变暗 (绿 → 暗绿), 一眼看出点序与时间远近; 前视点用更大的黄球。
-        不画连线是故意的: waypoints 是 2 Hz 的 10 个采样点, 连成折线会被当成“路径”误读。
+        不画连线是故意的: waypoints 是 2 Hz 的 WP_N 个采样点, 连成折线会被当成“路径”误读。
         """
         self.wp_drawer.reset()
         self.look_drawer.reset()
@@ -536,7 +536,7 @@ def _summarize(rows, wp_ego_all, wp_world_all, s_all, sk_all, v_all, ref,
     lat = np.array([r["lat_err"] for r in rows])
     speed = np.array([r["speed_kmh"] for r in rows])
     steer = np.array([r["steering"] for r in rows])
-    wp_ego = np.asarray(wp_ego_all)[WARMUP_TICKS:]   # [N,10,2]
+    wp_ego = np.asarray(wp_ego_all)[WARMUP_TICKS:]   # [N,WP_N,2]
     v_ms = np.asarray(v_all)[WARMUP_TICKS:]
     s_all = np.asarray(s_all)
     n = len(rows)
@@ -548,8 +548,8 @@ def _summarize(rows, wp_ego_all, wp_world_all, s_all, sk_all, v_all, ref,
     t1 = float(np.max(np.abs(np.linalg.norm(wp_ego[:, 0], axis=1)[valid] - exp0[valid])
                        / exp0[valid])) if valid.any() else 0.0
     # T2: 相邻点间距 = v·0.5s
-    seg = np.linalg.norm(np.diff(wp_ego, axis=1), axis=2)      # [N,9]
-    exp = np.repeat(exp0[:, None], 9, axis=1)
+    seg = np.linalg.norm(np.diff(wp_ego, axis=1), axis=2)      # [N,WP_N-1]
+    exp = np.repeat(exp0[:, None], WP_N - 1, axis=1)
     ok2 = exp > MIN_EXPECT_SPACING_M
     t2 = float(np.median(np.abs(seg - exp)[ok2] / exp[ok2])) if ok2.any() else 0.0
     # T3: 里程推进 = v·0.1s, 且单调 (在完整 s_car 序列上差分后再截窗)

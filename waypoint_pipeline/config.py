@@ -2,7 +2,9 @@
 
 约定:
 - 仿真控制频率 10 Hz (decision_repeat=5 x physics 0.02s = 0.1s/step)
-- waypoints: 未来 5 秒, 2 Hz, 共 10 个点, ego 坐标系 (x 前, y 左), 单位米
+- waypoints: 未来 3 秒, 2 Hz, 共 6 个点, ego 坐标系 (x 前, y 左), 单位米
+  时域取 3 s 而不是 5 s: 更远的点对控制没有作用, 且弯道上转角更大,
+  拟合 loss 更高反而误导模型; 3 s @ 70 km/h 已覆盖 ~58 m 前瞻。
 - 所有运行均为无头模式 (use_render=False), 不弹出任何窗口
 """
 from __future__ import annotations
@@ -16,16 +18,16 @@ REF_PATH_FILE = PROJECT_ROOT / "simple_track_reference_clean.json"
 OUT_DIR = HERE / "output"
 
 # ---- 时间 waypoints 规格 ----
-WP_HORIZON_S = 5.0        # 未来时域
+WP_HORIZON_S = 3.0        # 未来时域 (3 s, 控制够用; 更远只会加大 loss)
 WP_FREQ_HZ = 2.0          # 采样频率
-WP_COUNT = int(WP_HORIZON_S * WP_FREQ_HZ)   # 10 个点
+WP_COUNT = int(WP_HORIZON_S * WP_FREQ_HZ)   # 6 个点
 WP_DT = 1.0 / WP_FREQ_HZ                    # 0.5 s
 
 # ---- 仿真 / 采集 ----
 SIM_DT = 0.1              # 每个 env.step 的仿真时长 (10 Hz)
 RECORD_HZ = 10            # 轨迹记录频率, 与 SIM_DT 一致
 TARGET_SPEED_KMH = 70.0   # 与 simple_track.TARGET_SPEED_KMH 一致
-TAIL_EXTRA_S = 6.0        # 过终点后多录几秒, 保证末尾帧也有完整未来 5s
+TAIL_EXTRA_S = 6.0        # 过终点后多录几秒, 保证末尾帧也有完整未来 3s
 QUICK_SECONDS = 90.0      # quick 模式只采前 90 秒 (直道+第一个大弯)
 
 # ---- 图片采集 (run_pipeline --images, 离屏渲染不弹窗) ----

@@ -92,7 +92,7 @@ def collect(out_path=None, quick: bool = False, verbose: bool = True, capture_im
                 prev_laps = laps
                 env.agent.reset_navigation()
                 if not quick:
-                    # 过终点后再录 TAIL_EXTRA_S, 保证末尾帧有完整未来 5s
+                    # 过终点后再录 TAIL_EXTRA_S, 保证末尾帧有完整未来 3s
                     tail_until = sim_t + config.TAIL_EXTRA_S
                     if lap_time_s is None:
                         lap_time_s = sim_t
