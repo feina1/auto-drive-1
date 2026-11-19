@@ -1,0 +1,10 @@
+# 训练机依赖 (Linux + NVIDIA GPU 推荐; macOS CPU/MPS 仅用于冒烟)
+# 安装: pip install -r requirements.txt
+# 国内网络可加: --index-url https://pypi.tuna.tsinghua.edu.cn/simple
+torch>=2.2
+torchvision>=0.17         # DINOv3 的 fast image processor 依赖 (缺它会报错)
+transformers>=4.56.0      # DINOv3 (AutoModel / AutoImageProcessor)
+pillow>=10.0
+numpy>=1.24
+matplotlib>=3.7
+modelscope>=1.9           # 仅下载 DINOv3 权重时需要 (bash components/dinov3/download_weights.sh)

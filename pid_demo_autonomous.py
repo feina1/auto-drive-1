@@ -62,11 +62,15 @@ class PathFollower:
        航向误差≈0，PID 不再修正，车就一直偏着走
     """
 
-    def __init__(self, ref_x, ref_y):
+    def __init__(self, ref_x, ref_y, target_speed_kmh=None):
         # 降采样参考路径（原始太密，1m 一个点）
         step = max(1, len(ref_x) // 3000)
         self.path_x = np.array(ref_x[::step])
         self.path_y = np.array(ref_y[::step])
+
+        # 巡航速度可按圈切换 (多圈变速采集用); 默认沿用全局 70 km/h
+        self.target_speed_kmh = float(TARGET_SPEED_KMH if target_speed_kmh is None
+                                     else target_speed_kmh)
 
         # Pure Pursuit 参数
         self.wheelbase = 2.5         # 轴距 (米), MetaDrive 默认车辆 ~2.5m
@@ -121,10 +125,14 @@ class PathFollower:
         signed_lat = dx * nx + dy * ny
         return signed_lat, abs(signed_lat)
 
+    def set_target_speed(self, target_speed_kmh):
+        """切换到新的巡航速度 (下一圈开始前调用)."""
+        self.target_speed_kmh = float(target_speed_kmh)
+
     def compute_control(self, vehicle_x, vehicle_y, vehicle_heading, vehicle_speed_km_h, dt):
         """返回 [steering, throttle]"""
         vehicle_speed_ms = vehicle_speed_km_h / 3.6
-        target_speed_ms = TARGET_SPEED_KMH / 3.6
+        target_speed_ms = self.target_speed_kmh / 3.6
 
         # ---- 纵向 PID ----
         speed_error = target_speed_ms - vehicle_speed_ms

@@ -13,6 +13,7 @@ build/
 venv/
 auto-drive-1/
 .venv/
+.venv-train/
 
 # IDE / OS
 .idea/
@@ -31,3 +32,34 @@ start_env.bat
 # Recorded datasets
 records/
 records_pid/
+records_perturbed/
+
+# Training data (too large for GitHub)
+train/data/
+
+# waypoint_pipeline 产物 (轨迹/图片/npz/checkpoint/报告, 均不入库)
+waypoint_pipeline/output/
+*.pt
+*.pth
+
+# DINOv3 weights (download via: bash components/dinov3/download_weights.sh)
+components/dinov3/weights/
+
+# Videos (not committed)
+videos/
+*.png
+*.jpg
+*.json
+*.md
+*.csv
+*.npz
+*.log
+
+# waypoint_pipeline 对外文档 (上面 *.md 默认忽略, 这里放行)
+!waypoint_pipeline/*.md
+!waypoint_pipeline/training/*.md
+!waypoint_pipeline/training/requirements.txt
+
+# 离线单图诊断报告 (版本化留档, 入库; 图片/指标 JSON)
+!waypoint_pipeline/reports/
+!waypoint_pipeline/reports/**
