@@ -172,7 +172,7 @@ def build_render_env(fps=None):
             show_navi_mark=False,
             show_line_to_navi_mark=False,
             show_lidar=False,
-            spawn_velocity=[config.TARGET_SPEED_KMH / 3.6, 0.0],
+            spawn_velocity=[0, 0],
             spawn_velocity_car_frame=True,
         ),
     )
@@ -412,6 +412,7 @@ def run(quick: bool = False, render: bool = False, spacing: float = 1.0,
 
             wp_ego, wp_world, s_car, s_k = make_wp(ref, ego_xy, heading, v_ms)
             action = ctrl.compute(wp_ego, float(v.speed_km_h), DT)
+            action[1] = round(action[1] * 10) / 10  # 吸附到 0.1 离散步长
             if render and overlay_np is None and overlay:
                 overlay_np = SceneOverlay(env, scope_window=scope_window)
             if overlay_np is not None:
