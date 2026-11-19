@@ -5,7 +5,7 @@
 用法:
     python3 run_pipeline.py                 # 完整: 整圈采集 + 整圈闭环评测
     python3 run_pipeline.py --quick         # 快速: 90s 片段 (调试)
-    python3 run_pipeline.py --images        # 采集阶段每 2s 采一帧相机图片 (离屏)
+    python3 run_pipeline.py --images        # 采集阶段每 0.5s 采一帧相机图片 (离屏)
     python3 run_pipeline.py --skip-collect  # 复用已有轨迹/数据集
     python3 run_pipeline.py --only collect,build,tune,eval,report
 """
@@ -54,7 +54,8 @@ def _report(quick: bool):
                   f"时长 {tm.get('duration_s')} s, 完圈 {tm.get('laps')}, "
                   f"出界帧 {tm.get('offroad_frames')}, 碰撞帧 {tm.get('collision_frames')}",
                   f"- 图片: {meta.get('num_images', 0)} 张"
-                  + (f", 每 {meta['image_interval_s']:.0f} s 一帧 → output/images/" if meta.get('num_images') else " (未采集)"),
+                  + (f", 每 {meta['image_interval_s']:.1f} s 一帧 → output/images/"
+                     if meta.get('num_images') else " (未采集)"),
                   f"- waypoints: 每帧 {meta['wp_count']} 点 = 未来 {meta['wp_horizon_s']} s @ "
                   f"{meta['wp_freq_hz']} Hz, ego 系 (x前 y左)",
                   f"- 整圈录制: {meta['closed_loop']} (完圈时刻 {meta.get('lap_period')} s), "
@@ -121,7 +122,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--images", action="store_true",
-                        help=f"采集阶段每 {config.IMAGE_INTERVAL_S:.0f}s 采一帧相机图片 (离屏, 不弹窗)")
+                        help=f"采集阶段每 {config.IMAGE_INTERVAL_S:.1f}s 采一帧相机图片 (离屏, 不弹窗)")
     parser.add_argument("--skip-collect", action="store_true")
     parser.add_argument("--only", type=str, default=None,
                         help="逗号分隔阶段: collect,build,tune,eval,report")

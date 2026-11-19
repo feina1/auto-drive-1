@@ -1,0 +1,62 @@
+{
+  "version": "v1",
+  "title": "v1 链路冒烟：TinyCNN 5圈数据 2 epochs（非精度结论）",
+  "note": "",
+  "created_at": "2026-11-18 13:10:12",
+  "baseline_id": "baseline-v1",
+  "code_fingerprint": "6ea74e88696e",
+  "sources": {
+    "ckpt": "output/training/smoke_5laps/tinycnn_best.pt",
+    "predict_dir": "output/training/smoke_5laps/predict_full",
+    "closed_loop_dir": "output/training/smoke_5laps/closed_loop",
+    "dataset": "/Users/wl/Downloads/work202611/auto-drive-1/waypoint_pipeline/output/dataset_waypoints_5laps.npz"
+  },
+  "metrics": {
+    "ade_m": 38.7633,
+    "fde_m": 59.7925,
+    "rmse_per_point_m": [
+      9.7463,
+      19.7941,
+      29.7109,
+      39.8167,
+      49.855,
+      59.7925
+    ],
+    "val_laps": [
+      5
+    ],
+    "train_samples": 300,
+    "val_samples": 2738,
+    "best_epoch": 2,
+    "closed_loop": {
+      "ckpt": "output/training/smoke_5laps/tinycnn_best.pt",
+      "backbone": "tinycnn",
+      "target_speed_kmh": 72.0,
+      "laps_done": 0,
+      "lap_times_s": [],
+      "completed": false,
+      "aborted": "max_seconds",
+      "frames": 200,
+      "duration_s": 20.0,
+      "lat_abs_mean_m": 12.2339,
+      "lat_abs_p95_m": 14.0803,
+      "lat_abs_max_m": 14.1819,
+      "offroad_ratio": 0.935,
+      "collision_frames": 0,
+      "speed_mean_kmh": 5.68,
+      "speed_min_kmh": 0.06,
+      "infer_count": 100,
+      "infer_ms": 6.24
+    }
+  },
+  "diagnosis": [
+    "预测坍缩到原点（均长 0.2 m vs GT 35.0 m）：head 未学会输出尺度，ADE≈GT 平均长度。",
+    "离线 ADE 38.8 m、FDE 59.8 m：尚未学会，仅用于验证链路。",
+    "训练样本仅 300 帧：结论不代表模型能力，先扩到全量。",
+    "验证圈 72 km/h 是训练未见速度：重点看速度分桶与闭环高速表现。",
+    "闭环被时长截断（冒烟），不是完圈结果，不能据此判通过。",
+    "出界率 93.50% 超阈值 1%：看地图上红叉分布。",
+    "闭环均速仅 5.7/72 km/h：预测过短或控制器几乎不前进。",
+    "GT 控制器基线通过（均速 70 km/h，平均横向 0.018 m）：问题不在控制器。"
+  ]
+}

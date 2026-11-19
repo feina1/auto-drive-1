@@ -26,11 +26,12 @@ def load_reference_path():
     return x, y
 
 
-def build_headless_env(with_camera: bool = False):
+def build_headless_env(with_camera: bool = False, spawn_speed_kmh: float | None = None):
     """构建无头 SimpleTrackEnv (与 pid_demo_autonomous 相同车辆/地图配置)."""
     from simple_track import LANE_NUM, LANE_WIDTH, SimpleTrackEnv
     from runtime_config import get_render_config
 
+    spawn_speed = float(config.TARGET_SPEED_KMH if spawn_speed_kmh is None else spawn_speed_kmh)
     cfg = dict(
         use_render=False,
         manual_control=False,
@@ -55,7 +56,7 @@ def build_headless_env(with_camera: bool = False):
             show_navi_mark=False,
             show_line_to_navi_mark=False,
             show_lidar=False,
-            spawn_velocity=[config.TARGET_SPEED_KMH / 3.6, 0.0],
+            spawn_velocity=[spawn_speed / 3.6, 0.0],
             spawn_velocity_car_frame=True,
         ),
     )
@@ -73,22 +74,34 @@ def build_headless_env(with_camera: bool = False):
     return SimpleTrackEnv(cfg)
 
 
-def capture_rgb(env, vehicle, path: Path):
-    """在当前位姿渲染并保存一帧 RGB (离屏, 不弹窗).
+def grab_rgb(env, vehicle):
+    """在当前位姿离屏渲染一帧 RGB, 返回 BGR ndarray (不落盘).
 
     无 main_camera 时 reset_sensors 不会把相机挂到车上, 必须手动 track 后再 renderFrame,
     否则读到的是旧位姿纹理。
     """
-    import cv2
     from metadrive.constants import DEFAULT_SENSOR_HPR, DEFAULT_SENSOR_OFFSET
 
     cam = env.engine.get_sensor("rgb_camera")
     cam.track(vehicle.origin, DEFAULT_SENSOR_OFFSET, DEFAULT_SENSOR_HPR)
     env.engine.graphicsEngine.renderFrame()
-    img = cam.get_image(vehicle, mode="bgr")
+    return cam.get_image(vehicle, mode="bgr")
+
+
+def capture_rgb(env, vehicle, path: Path, quality: int | None = None):
+    """在当前位姿渲染并保存一帧 RGB (离屏, 不弹窗).
+
+    根据扩展名选择编码: .jpg/.jpeg 用 config.IMAGE_QUALITY, 其余按原格式写入。
+    """
+    import cv2
+
+    img = grab_rgb(env, vehicle)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    if not cv2.imwrite(str(path), img):
+    params = []
+    if path.suffix.lower() in (".jpg", ".jpeg"):
+        params = [cv2.IMWRITE_JPEG_QUALITY, int(config.IMAGE_QUALITY if quality is None else quality)]
+    if not cv2.imwrite(str(path), img, params):
         raise IOError(f"图片写入失败: {path}")
     return path
 
@@ -128,7 +141,12 @@ def load_trajectory(path: Path):
 
 
 def frames_to_arrays(frames: list):
-    """轨迹帧列表 → numpy 数组 (t, x, y, heading, speed_kmh, steering, throttle, brake)."""
+    """轨迹帧列表 → numpy 数组.
+
+    必有: t, x, y, heading, speed_kmh, steering, throttle, brake。
+    多圈采集额外: lap (1-based), lap_t, target_speed_kmh, yaw_rate, accel_ms2。
+    旧轨迹没有这些字段时填 0 / 目标速度默认值, 保证向后兼容。
+    """
     t = np.array([f["t"] for f in frames], dtype=float)
     x = np.array([f["position"]["x"] for f in frames], dtype=float)
     y = np.array([f["position"]["y"] for f in frames], dtype=float)
@@ -137,8 +155,16 @@ def frames_to_arrays(frames: list):
     steering = np.array([f["control"]["steering"] for f in frames], dtype=float)
     throttle = np.array([f["control"]["throttle"] for f in frames], dtype=float)
     brake = np.array([f["control"]["brake"] for f in frames], dtype=float)
+    lap = np.array([f.get("lap", 0) for f in frames], dtype=int)
+    lap_t = np.array([f.get("lap_t", f["t"]) for f in frames], dtype=float)
+    target = np.array([f.get("target_speed_kmh", config.TARGET_SPEED_KMH) for f in frames],
+                      dtype=float)
+    yaw_rate = np.array([f.get("yaw_rate", 0.0) for f in frames], dtype=float)
+    accel = np.array([f.get("accel_ms2", 0.0) for f in frames], dtype=float)
     return dict(t=t, x=x, y=y, heading=heading, speed_kmh=speed,
-                steering=steering, throttle=throttle, brake=brake)
+                steering=steering, throttle=throttle, brake=brake,
+                lap=lap, lap_t=lap_t, target_speed_kmh=target,
+                yaw_rate=yaw_rate, accel_ms2=accel)
 
 
 class LateralErrorTracker:
